@@ -1,0 +1,8 @@
+src/bin/
+src/obj/
+dist/
+.vs/
+.idea/
+*.user
+*.suo
+*.log
