@@ -2,6 +2,9 @@
 
 [English](README.en.md) | 简体中文
 
+> [!IMPORTANT]
+> **安装前置：** 本 Mod 必须通过 [Mayday 模组管理器](https://github.com/LS3213/Mayday-Mod-Manager)（作者 **lansi**）安装并启用。请先安装管理器，再在游戏主菜单的 **MOD 管理 → 添加 MOD** 中导入 `.maydaymod`；只把包文件放进游戏目录不会加载。
+
 面向 **Mayday Mod Manager 1.2.6 / MelonLoader 0.7.3** 的房主管理 Mod。只有创建房间的房主需要安装；加入他人房间的客户端不需要安装，也无法打开管理面板。
 
 > 非官方 Mod，与游戏开发商/发行商无关。使用前请阅读“限制”，并遵守游戏及 MelonLoader、Harmony 等相关条款。
