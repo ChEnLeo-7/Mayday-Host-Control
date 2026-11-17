@@ -31,7 +31,7 @@ Screenshots use the English UI; the panel itself supports 11 languages.
 - **Settings**: 11 panel languages and shortcut rebinding.
 - **Lobby defaults**: save the next room's name, capacity, join permission, and visibility.
 - The blacklist persists; management actions are logged.
-- Flight-save code is retained, but the tab is hidden from navigation.
+- Flight saves are not integrated yet; a future version may integrate lansi's Mayday Save.
 
 ## Requirements
 
@@ -73,7 +73,7 @@ Screenshots use the English UI; the panel itself supports 11 languages.
 
 - Room name (up to 48 characters).
 - Capacity 1–250; Steam or the game may enforce a lower limit. Saves use the value actually accepted by the Steam Lobby.
-- Allow joining: disabling it blocks new players while existing players stay connected. Re-enabling requires the recovery flow to be unlocked.
+- Allow joining: disabling it blocks new players while existing players stay connected.
 - Visibility: Invite only / Friends only / Public. Changes are applied to the Steam Lobby type immediately; propagation to external lists is handled by Steam.
 - Save / Save and apply applies changes in order; failures are written to the log. 0.5.27 fixes a stale pending value when the visibility selector was switched away from and back to its original option.
 - When opened from the lobby, this tab is "Next room defaults"; saved values are applied the next time a room is created.
@@ -83,17 +83,15 @@ Screenshots use the English UI; the panel itself supports 11 languages.
 - Panel language: 简体中文, English, Français, Deutsch, Español, Português (Brasil), Türkçe, Русский, 日本語, 한국어, Polski. Changes apply immediately and are saved.
 - Panel shortcut: click, then press a new key. `Esc` cancels.
 
-### Flight saves (hidden)
+### Flight saves (not included yet)
 
-- `Ground / ExactGround`: save after a stable stop with the parking brake engaged; restore on the ground.
-- `Airborne / SafeOriginPreShift`: save host-authoritative economy, durability, resources, items, player assets, and kinematics; loading returns to the departure airport `PreShift` and cancels the current flight.
-- Recovery is not a transaction rollback. A failure during the apply stage locks the current room; create a new room and retry.
-- In-flight snapshots do not restore spawned passengers, airborne physics, or vanilla remote-client local actions such as climbing, ropes, or downed states.
-- The Saves tab is hidden from navigation; the underlying data and code are retained.
+This version does **not** provide flight saves or restoration, and the Saves tab is not shown. The legacy save code is no longer documented as part of this release's supported feature set.
+
+A future version may integrate or support **lansi**'s [Mayday Save](https://github.com/LS3213/Mayday-Mod-Manager/tree/main/mods/mayday-save). Until then, install lansi's save mod separately if you need save/restore, and check version compatibility between the two mods; do not rely on two uncoordinated save paths at the same time.
 
 ## Data and privacy
 
-- Data directory: `UserData/MaydayHostControl/` (configuration, blacklist, player tags, checkpoints, diagnostics).
+- Data directory: `UserData/MaydayHostControl/` (configuration, blacklist, player tags, legacy checkpoints, diagnostics).
 - The mod reads legacy `BepInEx/config` data left in the game directory but never moves or deletes it.
 - No HTTP server is started. Steam profile buttons open the Steam overlay or a browser link.
 - Logs and diagnostic bundles may contain SteamIDs and player names; redact them before sharing.
@@ -136,10 +134,8 @@ You need the .NET 6 SDK and a game directory where MelonLoader has already gener
 
 - Game updates may break native UI or reflection calls.
 - The panel releases the mouse but cannot guarantee that all flight input is blocked; pause the game or leave the seat before using it.
-- Recovery is not a transaction rollback. A failed apply stage locks the room; create a new room and retry.
-- Complete a real multiplayer round trip before relying on a unique save.
 - Host only; clients joining another room have no management entry point.
-- The Saves tab is currently hidden, but the related code remains.
+- Flight saves are not available in this version; use lansi's Mayday Save if needed.
 
 ## License
 
