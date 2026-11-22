@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.IO.Compression;
@@ -18,7 +17,7 @@ using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(MaydayHostControl.Plugin), "更好的房主管理", "0.5.27", "Mayday Host Control")]
+[assembly: MelonInfo(typeof(MaydayHostControl.Plugin), "更好的房主管理", "0.5.69", "Mayday Host Control")]
 
 namespace MaydayHostControl
 {
@@ -26,7 +25,7 @@ namespace MaydayHostControl
     {
         public const string Guid = "local.mayday.hostcontrol";
         public const string Name = "更好的房主管理";
-        public const string Version = "0.5.27";
+        public const string Version = "0.5.69";
 
         internal static ManualLogSource Log;
         internal static bool DebugLoggingEnabled = false;
@@ -410,9 +409,9 @@ namespace MaydayHostControl
         internal static string BlacklistPath;
         internal static string PlayerTagsPath;
         internal static string CommandPath;
-        internal static ConfigEntry<int> WebPort;
         internal static ConfigEntry<string> OpenPanelKey;
         internal static ConfigEntry<string> PanelLanguage;
+        internal static ConfigEntry<string> ItemFavoritesConfig;
         internal static ConfigEntry<string> RoomName;
         internal static ConfigEntry<bool> DefaultRoomJoinable;
         internal static ConfigEntry<string> DefaultRoomVisibility;
@@ -423,23 +422,14 @@ namespace MaydayHostControl
 
         // Exposed without a compile-time reference so the optional capacity mod can read the live panel value.
         public static int AuthoritativeCapacity => Math.Max(1, Math.Min(250, PlayerLimit != null ? PlayerLimit.Value : 6));
-        private static HttpListener Web;
-        private static Thread WebThread;
         private sealed class AdminCommand
         {
             public string Id;
             public string Text;
-            public bool Web;
         }
 
         private static readonly Queue<AdminCommand> Commands = new();
-        private static readonly Dictionary<string, string> WebResults = new();
-        private static readonly Queue<string> WebResultOrder = new();
-        private static readonly Queue<string> Audit = new();
         private static readonly object StateLock = new();
-        private static string CachedStatusJson = "{}";
-        private static DateTime NextStatusRefreshUtc;
-        private static bool VisibilitySetKnown;
         private static bool VisibilitySetSucceeded;
         private static string LastVisibilityRequested = string.Empty;
         private static DateTime LastVisibilityChangedUtc;
@@ -457,7 +447,6 @@ namespace MaydayHostControl
             Log = new ManualLogSource(Name);
             Settings = new ConfigFile("MaydayHostControl");
             try { CurrentGameVersion = Application.version.ToString(); } catch { CurrentGameVersion = string.Empty; }
-            WebPort = Settings.Bind("LegacyWeb", "Port", 27842, "保留字段；Manager 版本不启动 HTTP 服务。");
             var detectedGameLanguage = DetectGameLanguage();
             PanelLanguage = Settings.Bind("General", "Language", detectedGameLanguage, "Host Control interface language; change in Settings.");
             OpenPanelKey = Settings.Bind("General", "OpenPanelKey", "F8", "Host Control shortcut; change in Settings.");
@@ -468,6 +457,15 @@ namespace MaydayHostControl
             RoomDefaultsConfigured = Settings.Bind("Room", "RoomDefaultsConfigured", false, "是否已保存创建前配置；未保存时保留游戏原本的可见性选择。");
             PlayerLimit = Settings.Bind("General", "PlayerLimit", 6, "Host-only Mirror/Steam 大厅人数上限，Mod 接受范围 1-250；Steam 或游戏运行时可能有更低上限。");
             PlayerLimit.Value = Math.Max(1, Math.Min(250, PlayerLimit.Value));
+            ItemFavoritesConfig = Settings.Bind("Items", "Favorites", "", "收藏的物品 id，逗号分隔。");
+            if (!string.IsNullOrWhiteSpace(ItemFavoritesConfig.Value))
+            {
+                foreach (var raw in ItemFavoritesConfig.Value.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var id = raw.Trim();
+                    if (id.Length > 0) ItemFavorites.Add(id);
+                }
+            }
             AllowAirborneSafetySnapshots = Settings.Bind("Save", "AllowAirborneSafetySnapshots", true, "允许在 Flight 阶段保存安全快照。读取时返回起飞机场 PreShift，不会原位恢复空中物理、乘客实体或客户端本地动作。");
             BlacklistPath = Path.Combine(Paths.ConfigPath, "mayday-hostcontrol-blacklist.txt");
             PlayerTagsPath = Path.Combine(Paths.ConfigPath, "mayday-hostcontrol-player-tags.json");
@@ -535,55 +533,6 @@ namespace MaydayHostControl
             var value = args[0].ToString();
             Execute(command + " " + value);
             ctx.Print("[HostAdmin] 已执行 " + command + " " + value);
-        }
-
-        private static void StartWebAdmin()
-        {
-            try
-            {
-                Web = new HttpListener();
-                Web.Prefixes.Add("http://127.0.0.1:" + WebPort.Value + "/");
-                Web.Start();
-                WebThread = new Thread(WebLoop) { IsBackground = true, Name = "MaydayHostControlWeb" };
-                WebThread.Start();
-                Log.LogInfo("[MaydayHostControl] 网页管理端已启动: http://127.0.0.1:" + WebPort.Value + "/");
-            }
-            catch (Exception e) { Log.LogError("[MaydayHostControl] 网页管理端启动失败: " + e.Message); }
-        }
-
-        private static void WebLoop()
-        {
-            while (Web != null && Web.IsListening)
-            {
-                try { HandleWeb(Web.GetContext()); }
-                catch (HttpListenerException) { break; }
-                catch (Exception e) { Log?.LogDebug("[MaydayHostControl] 网页请求失败: " + e.Message); }
-            }
-        }
-
-        private sealed class WebAction
-        {
-            public string action { get; set; }
-            public string steamId { get; set; }
-        }
-
-        private sealed class RoomControlRequest
-        {
-            public int capacity { get; set; }
-            public bool joinable { get; set; }
-            public string visibility { get; set; }
-        }
-
-        private sealed class PlayerTagRequest
-        {
-            public string steamId { get; set; }
-            public string tag { get; set; }
-        }
-
-        private sealed class CheckpointRequest
-        {
-            public string id { get; set; }
-            public string name { get; set; }
         }
 
         private sealed class CheckpointSummary
@@ -889,242 +838,6 @@ namespace MaydayHostControl
             return result.OrderByDescending(x => x.savedUtc).ToArray();
         }
 
-        private static CheckpointRequest ReadCheckpointRequest(HttpListenerRequest request)
-        {
-            using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
-            var text = reader.ReadToEnd();
-            return string.IsNullOrWhiteSpace(text) ? new CheckpointRequest() : JsonSerializer.Deserialize<CheckpointRequest>(text);
-        }
-
-        private static string QueueWebCommand(string command)
-        {
-            var id = System.Guid.NewGuid().ToString("N");
-            lock (Commands) Commands.Enqueue(new AdminCommand { Id = id, Text = command, Web = true });
-            return JsonSerializer.Serialize(new { id, queued = true });
-        }
-
-        private static string BuildCommand(WebAction action)
-        {
-            if (action == null || !ulong.TryParse(action.steamId, out var id)) return string.Empty;
-            switch ((action.action ?? string.Empty).ToLowerInvariant())
-            {
-                case "kick": return "kick " + id;
-                case "ban": return "ban " + id;
-                case "unban": return "unban " + id;
-                default: return string.Empty;
-            }
-        }
-
-        private static void RefreshWebSnapshot()
-        {
-            if (DateTime.UtcNow < NextStatusRefreshUtc) return;
-            NextStatusRefreshUtc = DateTime.UtcNow.AddMilliseconds(500);
-            try
-            {
-                var localConnection = Il2CppMirror.NetworkServer.localConnection;
-                var players = Online.Select(x => new { name = x.Value.Name, steamId = x.Value.SteamId.ToString(), tag = PlayerTags.TryGetValue(x.Value.SteamId, out var tag) ? tag : string.Empty, connection = x.Key.connectionId, isHost = localConnection != null && x.Key.connectionId == localConnection.connectionId, profileUrl = "https://steamcommunity.com/profiles/" + x.Value.SteamId, addFriendUrl = "steam://friends/add/" + x.Value.SteamId }).ToArray();
-                string[] audit;
-                lock (StateLock) audit = Audit.Reverse().Take(30).ToArray();
-                var gameState = Il2CppMayday.GameState.Instance;
-                var lobbyService = LobbyService;
-                var currentRoomName = lobbyService != null && lobbyService.InLobby && !string.IsNullOrWhiteSpace(lobbyService.LobbyName) ? lobbyService.LobbyName : RoomName.Value;
-                var lobbyVisibility = lobbyService != null ? lobbyService.Visibility.ToString() : "Unknown";
-                var lobbyAdvertise = lobbyService != null && lobbyService.Advertise;
-                var lobbyId = lobbyService != null && lobbyService.InLobby ? lobbyService.Lobby.m_SteamID : 0UL;
-                int lobbyMembers = -1, lobbyLimit = -1;
-                var lobbyJoinable = false;
-                if (lobbyId != 0)
-                {
-                    var lobby = new Il2CppSteamworks.CSteamID(lobbyId);
-                    lobbyMembers = Il2CppSteamworks.SteamMatchmaking.GetNumLobbyMembers(lobby);
-                    lobbyLimit = Il2CppSteamworks.SteamMatchmaking.GetLobbyMemberLimit(lobby);
-                    lobbyJoinable = LastJoinableSetKnown && LastJoinableSet;
-                }
-                var managerLimit = Il2CppMirror.NetworkManager.singleton != null ? Il2CppMirror.NetworkManager.singleton.maxConnections : -1;
-                var mirrorLimit = Il2CppMirror.NetworkServer.maxConnections;
-                var mirrorConnections = Il2CppMirror.NetworkServer.connections != null ? Il2CppMirror.NetworkServer.connections.Count : 0;
-                var checkpointCount = ListCheckpoints().Length;
-                var json = JsonSerializer.Serialize(new { players, bans = Blacklist.OrderBy(x => x).Select(x => x.ToString()).ToArray(), roomName = currentRoomName, configuredRoomName = RoomName.Value, audit, onlineCount = players.Length, capacity = PlayerLimit.Value, serverActive = Il2CppMirror.NetworkServer.activeHost, mirrorLimit, managerLimit, mirrorConnections, lobbyId = lobbyId.ToString(), lobbyMembers, lobbyLimit, lobbyJoinable, lobbyVisibility, lobbyAdvertise, visibilitySetKnown = VisibilitySetKnown, visibilitySetSucceeded = VisibilitySetSucceeded, visibilityRequested = LastVisibilityRequested, visibilityChangedUtc = LastVisibilityChangedUtc == default ? string.Empty : LastVisibilityChangedUtc.ToString("O"), manualJoinAllowed = ManualJoinAllowed, phase = gameState != null ? gameState.Phase.ToString() : "Unknown", leg = gameState != null ? gameState.Leg : -1, money = gameState != null ? gameState.Money : 0, checkpointExists = checkpointCount > 0, checkpointCount, recoveryMessage = LastRecoveryMessage, recoveryStage = RecoveryStage, recoveryOperationId = ActiveRecovery?.Id ?? string.Empty, recoveryPoisoned = RecoveryPoisoned, recoveryPoisonReason = RecoveryPoisonReason, pendingPlayerRecovery = PendingPlayerRecovery.Count, currentFlight = gameState != null && gameState.Leg > 0 ? gameState.Leg : 0 });
-                lock (StateLock) CachedStatusJson = json;
-            }
-            catch (Exception e) { LogEvent("status-snapshot-error", e.Message); }
-        }
-
-        private static void HandleWeb(HttpListenerContext context)
-        {
-            var request = context.Request;
-            var expectedHost = "127.0.0.1:" + WebPort.Value;
-            var origin = request.Headers["Origin"];
-            if (!string.Equals(request.Headers["Host"], expectedHost, StringComparison.OrdinalIgnoreCase) ||
-                ((request.HttpMethod == "POST" || request.HttpMethod == "DELETE") && origin != null && !string.Equals(origin, "http://" + expectedHost, StringComparison.OrdinalIgnoreCase)))
-            {
-                context.Response.StatusCode = 403;
-                context.Response.Close();
-                return;
-            }
-            var path = request.Url.AbsolutePath;
-            string body;
-            if (path == "/api/status")
-            {
-                lock (StateLock) body = CachedStatusJson;
-                context.Response.ContentType = "application/json; charset=utf-8";
-            }
-            else if (path == "/api/diagnostic/latest" && request.HttpMethod == "GET")
-            {
-                if (string.IsNullOrEmpty(LastDiagnosticZip) || !File.Exists(LastDiagnosticZip)) { context.Response.StatusCode = 404; body = "诊断包不存在"; context.Response.ContentType = "text/plain; charset=utf-8"; }
-                else
-                {
-                    context.Response.ContentType = "application/zip";
-                    context.Response.AddHeader("Content-Disposition", "attachment; filename=\"" + Path.GetFileName(LastDiagnosticZip) + "\"");
-                    context.Response.ContentLength64 = new FileInfo(LastDiagnosticZip).Length;
-                    using var fs = File.OpenRead(LastDiagnosticZip);
-                    fs.CopyTo(context.Response.OutputStream);
-                    context.Response.Close();
-                    return;
-                }
-            }
-            else if (path == "/api/checkpoints" && request.HttpMethod == "GET")
-            {
-                body = JsonSerializer.Serialize(new { checkpoints = ListCheckpoints() });
-                context.Response.ContentType = "application/json; charset=utf-8";
-            }
-            else if (path == "/api/checkpoints" && request.HttpMethod == "POST")
-            {
-                var data = ReadCheckpointRequest(request) ?? new CheckpointRequest();
-                var name = SanitizeCheckpointName(data.name);
-                var encodedName = name.Length == 0 ? "-" : Convert.ToBase64String(Encoding.UTF8.GetBytes(name));
-                body = QueueWebCommand("checkpoint " + encodedName);
-                context.Response.ContentType = "application/json; charset=utf-8";
-            }
-            else if (path == "/api/checkpoints/recover" && request.HttpMethod == "POST")
-            {
-                var data = ReadCheckpointRequest(request);
-                body = data == null || ResolveCheckpointPath(data.id) == null ? "{\"error\":\"invalid_checkpoint\"}" : QueueWebCommand("recover " + data.id);
-                if (data == null || ResolveCheckpointPath(data.id) == null) context.Response.StatusCode = 400;
-                context.Response.ContentType = "application/json; charset=utf-8";
-            }
-            else if (path == "/api/checkpoints/delete" && request.HttpMethod == "POST")
-            {
-                var data = ReadCheckpointRequest(request);
-                body = data == null || IsReadOnlyLegacyCheckpoint(data.id) || ResolveCheckpointPath(data.id) == null ? "{\"error\":\"invalid_checkpoint\"}" : QueueWebCommand("deletecheckpoint " + data.id);
-                if (data == null || IsReadOnlyLegacyCheckpoint(data.id) || ResolveCheckpointPath(data.id) == null) context.Response.StatusCode = 400;
-                context.Response.ContentType = "application/json; charset=utf-8";
-            }
-            else if (path == "/api/checkpoint" && request.HttpMethod == "POST")
-            {
-                body = QueueWebCommand("checkpoint -");
-                context.Response.ContentType = "application/json; charset=utf-8";
-            }
-            else if (path == "/api/recover" && request.HttpMethod == "POST")
-            {
-                var latest = ListCheckpoints().FirstOrDefault(x => x.compatible);
-                body = latest == null ? "{\"error\":\"no_compatible_checkpoint\"}" : QueueWebCommand("recover " + latest.id);
-                if (latest == null) context.Response.StatusCode = 400;
-                context.Response.ContentType = "application/json; charset=utf-8";
-            }
-            else if (path == "/api/export-diagnostics" && request.HttpMethod == "POST")
-            {
-                body = QueueWebCommand("exportlogs");
-                context.Response.ContentType = "application/json; charset=utf-8";
-            }
-            else if (path == "/api/room-name" && request.HttpMethod == "POST")
-            {
-                using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
-                var requestedName = SanitizeRoomName(reader.ReadToEnd());
-                var id = System.Guid.NewGuid().ToString("N");
-                var encodedName = requestedName.Length == 0 ? "-" : Convert.ToBase64String(Encoding.UTF8.GetBytes(requestedName));
-                lock (Commands) Commands.Enqueue(new AdminCommand { Id = id, Text = "setroom " + encodedName, Web = true });
-                body = JsonSerializer.Serialize(new { id, queued = true, roomName = requestedName, applies = "next_lobby" });
-                context.Response.ContentType = "application/json; charset=utf-8";
-            }
-            else if (path == "/api/room-capacity" && request.HttpMethod == "POST")
-            {
-                using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
-                var control = JsonSerializer.Deserialize<RoomControlRequest>(reader.ReadToEnd());
-                if (control == null || control.capacity < 1 || control.capacity > 250) { context.Response.StatusCode = 400; body = "{\"error\":\"capacity_must_be_1_to_250\"}"; }
-                else body = QueueWebCommand("setcapacity " + control.capacity);
-                context.Response.ContentType = "application/json; charset=utf-8";
-            }
-            else if (path == "/api/room-joinable" && request.HttpMethod == "POST")
-            {
-                using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
-                var control = JsonSerializer.Deserialize<RoomControlRequest>(reader.ReadToEnd());
-                if (control == null) { context.Response.StatusCode = 400; body = "{\"error\":\"invalid_joinable_request\"}"; }
-                else body = QueueWebCommand("setjoinable " + (control.joinable ? "true" : "false"));
-                context.Response.ContentType = "application/json; charset=utf-8";
-            }
-            else if (path == "/api/room-visibility" && request.HttpMethod == "POST")
-            {
-                using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
-                var control = JsonSerializer.Deserialize<RoomControlRequest>(reader.ReadToEnd());
-                var visibility = control?.visibility ?? string.Empty;
-                if (visibility != "Private" && visibility != "FriendsOnly" && visibility != "Public") { context.Response.StatusCode = 400; body = "{\"error\":\"invalid_visibility\"}"; }
-                else body = QueueWebCommand("setvisibility " + visibility);
-                context.Response.ContentType = "application/json; charset=utf-8";
-            }
-            else if (path == "/api/kick-all" && request.HttpMethod == "POST")
-            {
-                body = QueueWebCommand("kickall");
-                context.Response.ContentType = "application/json; charset=utf-8";
-            }
-            else if (path == "/api/player-tag" && request.HttpMethod == "POST")
-            {
-                using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
-                var data = JsonSerializer.Deserialize<PlayerTagRequest>(reader.ReadToEnd());
-                if (data == null || string.IsNullOrWhiteSpace(data.steamId) || !ulong.TryParse(data.steamId, out var tagId) || tagId == 0)
-                {
-                    context.Response.StatusCode = 400;
-                    body = "{\"error\":\"invalid_player_tag_request\"}";
-                }
-                else
-                {
-                    var rawTag = data.tag ?? string.Empty;
-                    var encodedTag = Convert.ToBase64String(Encoding.UTF8.GetBytes(rawTag));
-                    body = QueueWebCommand("settag " + tagId + " " + encodedTag);
-                }
-                context.Response.ContentType = "application/json; charset=utf-8";
-            }
-            else if (path == "/api/action" && request.HttpMethod == "POST")
-            {
-                using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
-                var action = JsonSerializer.Deserialize<WebAction>(reader.ReadToEnd());
-                var id = System.Guid.NewGuid().ToString("N");
-                var command = action == null ? string.Empty : BuildCommand(action);
-                if (command.Length == 0) { context.Response.StatusCode = 400; body = "{\"error\":\"invalid_action\"}"; }
-                else
-                {
-                    lock (Commands) Commands.Enqueue(new AdminCommand { Id = id, Text = command, Web = true });
-                    body = JsonSerializer.Serialize(new { id, queued = true });
-                }
-                context.Response.ContentType = "application/json; charset=utf-8";
-            }
-            else if (path.StartsWith("/api/result/") && request.HttpMethod == "GET")
-            {
-                var id = path.Substring("/api/result/".Length);
-                lock (StateLock) body = JsonSerializer.Serialize(new { done = WebResults.TryGetValue(id, out var result), result });
-                context.Response.ContentType = "application/json; charset=utf-8";
-            }
-            else if (path == "/api/command" && request.HttpMethod == "POST")
-            {
-                using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
-                var command = reader.ReadToEnd();
-                lock (Commands) Commands.Enqueue(new AdminCommand { Id = System.Guid.NewGuid().ToString("N"), Text = command, Web = false });
-                body = "{\"queued\":true}";
-                context.Response.ContentType = "application/json; charset=utf-8";
-            }
-            else
-            {
-                body = WebPage;
-                context.Response.ContentType = "text/html; charset=utf-8";
-            }
-            var bytes = Encoding.UTF8.GetBytes(body);
-            context.Response.ContentLength64 = bytes.Length;
-            using var output = context.Response.OutputStream;
-            output.Write(bytes, 0, bytes.Length);
-        }
-
-        private static readonly string WebPage = AdminWebPage.Html;
-
         private static void ReadConsole()
         {
             try
@@ -1133,7 +846,7 @@ namespace MaydayHostControl
                 {
                     var line = Console.ReadLine();
                     if (line == null) break;
-                    lock (Commands) Commands.Enqueue(new AdminCommand { Id = System.Guid.NewGuid().ToString("N"), Text = line, Web = false });
+                    lock (Commands) Commands.Enqueue(new AdminCommand { Id = System.Guid.NewGuid().ToString("N"), Text = line });
                 }
             }
             catch (Exception e) { Log?.LogDebug("[MaydayHostControl] 控制台输入不可用: " + e.Message); }
@@ -1141,7 +854,6 @@ namespace MaydayHostControl
 
         internal static void PumpCommands()
         {
-            RefreshWebSnapshot();
             PumpRecoveryOperation();
             PumpPlayerRecovery();
             PumpFileCommands();
@@ -1150,9 +862,6 @@ namespace MaydayHostControl
                 AdminCommand command;
                 lock (Commands) { if (Commands.Count == 0) return; command = Commands.Dequeue(); }
                 var result = Execute(command.Text);
-                NextStatusRefreshUtc = DateTime.MinValue;
-                RefreshWebSnapshot();
-                if (command.Web) CompleteWebCommand(command, result);
             }
         }
 
@@ -1194,7 +903,6 @@ namespace MaydayHostControl
             ActiveRecovery = null;
             RecoveryStage = "IDLE";
             ManualJoinAllowed = DefaultRoomJoinable.Value;
-            VisibilitySetKnown = false;
             VisibilitySetSucceeded = false;
             LastVisibilityRequested = string.Empty;
             LastVisibilityChangedUtc = default;
@@ -1404,24 +1112,8 @@ namespace MaydayHostControl
             catch (Exception e) { Log.LogWarning("[MaydayHostControl] 清空命令文件失败: " + e.Message); }
             foreach (var line in pending)
             {
-                var command = new AdminCommand { Id = System.Guid.NewGuid().ToString("N"), Text = line, Web = false };
+                var command = new AdminCommand { Id = System.Guid.NewGuid().ToString("N"), Text = line };
                 Execute(command.Text);
-            }
-        }
-
-        private static void CompleteWebCommand(AdminCommand command, string result)
-        {
-            lock (StateLock)
-            {
-                WebResults[command.Id] = result;
-                WebResultOrder.Enqueue(command.Id);
-                while (WebResultOrder.Count > 64)
-                {
-                    var expired = WebResultOrder.Dequeue();
-                    WebResults.Remove(expired);
-                }
-                Audit.Enqueue(DateTime.Now.ToString("HH:mm:ss") + " " + result);
-                while (Audit.Count > 100) Audit.Dequeue();
             }
         }
 
@@ -1532,16 +1224,19 @@ namespace MaydayHostControl
             return id.All(c => !char.IsControl(c) && (char.IsLetterOrDigit(c) || c == '_' || c == '-' || c == '.' || c == '/'));
         }
 
-        private static bool IsSupportedItemId(string id)
+        private static bool IsGrantableItemId(string id)
         {
             if (!IsSupportedInventoryItemId(id)) return false;
             if (!ItemCatalogReady) { Il2CppMayday.ItemCatalog.Build(); ItemCatalogReady = true; }
-            if (string.Equals(id, "hammer", StringComparison.OrdinalIgnoreCase)) return true;
-            if (!Il2CppMayday.ItemCatalog.Implemented(id)) return false;
             var info = Il2CppMayday.ItemCatalog.Get(id);
             if (info == null) return false;
             var category = info.category.ToString();
             return category == "Cabin" || category == "Galley" || category == "Cleaning" || category == "Maintenance" || category == "Misc";
+        }
+
+        private static bool IsSupportedItemId(string id)
+        {
+            return IsGrantableItemId(id);
         }
 
         private static bool IsUnsafePersistentItem(Il2CppMayday.Item item)
@@ -2611,6 +2306,92 @@ namespace MaydayHostControl
             return cleaned.Length <= 48 ? cleaned : cleaned.Substring(0, 48);
         }
 
+        private static string GrantInventoryItems(Il2CppMayday.PlayerNet player, string itemId, int quantity)
+        {
+            if (!Il2CppMirror.NetworkServer.activeHost) return Loc.T("Only the host can grant items");
+            if (player == null || quantity < 1 || quantity > 99) return Loc.T("Invalid item grant request");
+            if (!IsSupportedItemId(itemId)) return Loc.T("This item cannot be granted");
+            if (player.Inventory == null || player.ViewTransform == null) return Loc.T("Target player is not online");
+            var steamId = player.SteamId;
+            var grantedToInventory = 0;
+            var spawnedInWorld = 0;
+            var failed = 0;
+            var free = Math.Max(0, player.Inventory.FreeSlotCount());
+            var inventoryCount = Math.Min(quantity, free);
+            for (var i = 0; i < inventoryCount; i++)
+            {
+                try
+                {
+                    var item = player.Inventory.ServerGive(itemId, null);
+                    if (item == null) failed++;
+                    else grantedToInventory++;
+                }
+                catch (Exception e)
+                {
+                    failed++;
+                    LogEvent("item-grant-inventory-error", "steam=" + steamId + " item=" + itemId + " error=" + e.Message);
+                }
+            }
+            var groundCount = quantity - grantedToInventory - failed;
+            var anchor = player.ViewTransform;
+            var forward = anchor.forward;
+            forward.y = 0f;
+            if (forward.sqrMagnitude < 0.01f) forward = player.transform.forward;
+            forward.Normalize();
+            var right = Vector3.Cross(Vector3.up, forward).normalized;
+            for (var i = 0; i < groundCount; i++)
+            {
+                try
+                {
+                    var offset = forward * (1.2f + (i % 4) * 0.35f) + right * ((i / 4) * 0.4f - 0.6f);
+                    var position = anchor.position + offset;
+                    position.y = Mathf.Max(position.y, player.transform.position.y + 0.15f);
+                    var rotation = Quaternion.Euler(0f, anchor.eulerAngles.y, 0f);
+                    var managed = new Action<Il2CppMayday.Item>(item =>
+                    {
+                        if (item == null) return;
+                        if (!IsSupportedItemId(item.ItemId)) { item.ServerDestroy(); return; }
+                        item.NetworkinWorld = true;
+                        item.NetworkisUsing = false;
+                        item.Networkattach = default(Il2CppMayday.AttachState);
+                        item.NetworksyncPos = position;
+                        item.NetworksyncRot = rotation;
+                        item.ServerTeleport(position, rotation);
+                    });
+                    var init = DelegateSupport.ConvertDelegate<Il2CppSystem.Action<Il2CppMayday.Item>>(managed);
+                    var spawned = Il2CppMayday.Item.ServerSpawn(itemId, position, rotation, init, true);
+                    if (spawned == null) failed++;
+                    else spawnedInWorld++;
+                }
+                catch (Exception e)
+                {
+                    failed++;
+                    LogEvent("item-grant-world-error", "steam=" + steamId + " item=" + itemId + " error=" + e.Message);
+                }
+            }
+            LogEvent("item-granted", "steam=" + steamId + " item=" + itemId + " requested=" + quantity + " inventory=" + grantedToInventory + " world=" + spawnedInWorld + " failed=" + failed);
+            if (failed == 0) return Loc.T("Granted item result: inventory {0}, ground {1}", grantedToInventory, spawnedInWorld);
+            return Loc.T("Granted item partial result: inventory {0}, ground {1}, failed {2}", grantedToInventory, spawnedInWorld, failed);
+        }
+
+        private static string ApplyMoney(int target)
+        {
+            if (!Il2CppMirror.NetworkServer.activeHost) return Loc.T("Only the host can change money");
+            if (target < 0) return Loc.T("Money must be zero or greater");
+            var state = Il2CppMayday.GameState.Instance;
+            if (state == null) return Loc.T("Game state is not initialized");
+            var before = state.Money;
+            var delta = (long)target - before;
+            if (delta == 0) return Loc.T("Money is already {0}", target);
+            if (delta < int.MinValue || delta > int.MaxValue) return Loc.T("Money change is out of range");
+            state.ServerAddMoney((int)delta, "host_control_adjustment");
+            var after = state.Money;
+            LogEvent("money-adjusted", "before=" + before + " target=" + target + " after=" + after + " delta=" + delta + " ledger=host_control_adjustment");
+            return after == target
+                ? Loc.T("Money updated to {0}", after)
+                : Loc.T("Money update requested; current value is {0}", after);
+        }
+
         private static string ApplyRoomName(string name)
         {
             var service = LobbyService;
@@ -2697,7 +2478,6 @@ namespace MaydayHostControl
             if (service == null || !service.InLobby || !service.Lobby.IsValid()) return "当前没有可修改的 Steam Lobby";
             var before = service.Visibility;
             var success = Il2CppSteamworks.SteamMatchmaking.SetLobbyType(service.Lobby, steamVisibility);
-            VisibilitySetKnown = true;
             VisibilitySetSucceeded = success;
             LastVisibilityRequested = value;
             LastVisibilityChangedUtc = DateTime.UtcNow;
@@ -2777,6 +2557,7 @@ namespace MaydayHostControl
                 catch (Exception e) { Log.LogError("[MaydayHostControl] 保存大厅名称失败: " + e.Message); return "保存大厅名称失败: " + e.Message; }
             }
             if (command == "setcapacity" && parts.Length >= 2 && int.TryParse(parts[1], out var capacity)) return ApplyRoomCapacity(capacity);
+            if (command == "setmoney" && parts.Length >= 2 && int.TryParse(parts[1], out var targetMoney)) return ApplyMoney(targetMoney);
             if (command == "settag" && parts.Length >= 3 && ulong.TryParse(parts[1], out var tagId))
             {
                 try

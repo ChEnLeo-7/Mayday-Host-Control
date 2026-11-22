@@ -31,8 +31,9 @@ foreach ($token in @('MelonPreferences.CreateCategory', 'MelonEnvironment.UserDa
 }
 if ($plugin.Contains('StartWebAdmin();')) { throw 'Manager port must not start the legacy HTTP service' }
 if ($plugin.Contains('[BepInPlugin')) { throw 'BepInEx plugin metadata remains in Manager port' }
-if ($manifest.schemaVersion -ne 1 -or $manifest.id -ne 'mayday-host-control' -or $manifest.version -ne '0.5.27') { throw 'Invalid Manager manifest' }
-if (-not $plugin.Contains('"更好的房主管理", "0.5.27", "Mayday Host Control"') -or -not $plugin.Contains('public const string Name = "更好的房主管理";') -or -not $plugin.Contains('public const string Version = "0.5.27";')) { throw 'Assembly/plugin version does not match Manager manifest' }
+if ($manifest.schemaVersion -ne 1 -or $manifest.id -ne 'mayday-host-control' -or $manifest.version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid Manager manifest' }
+$version = $manifest.version
+if (-not $plugin.Contains(('"更好的房主管理", "{0}", "Mayday Host Control"' -f $version)) -or -not $plugin.Contains('public const string Name = "更好的房主管理";') -or -not $plugin.Contains(('public const string Version = "{0}";' -f $version))) { throw 'Assembly/plugin version does not match Manager manifest' }
 if ($gui.Contains('case 3: BuildSaves();') -or $gui.Contains('"Saves"')) { throw 'Save tab must remain hidden from navigation' }
 if (-not $gui.Contains('GetMainMenuHostButtonWidth') -or -not $gui.Contains('TextOverflowModes.Overflow')) { throw 'Main menu host button must fit its localized label without truncation' }
 if (-not $plugin.Contains('Application.systemLanguage') -or -not $plugin.Contains('Loc.FromSystemLanguage')) { throw 'Initial panel language must follow the game/system language' }

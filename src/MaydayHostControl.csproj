@@ -12,7 +12,6 @@
     <Interop>$(GameDir)\MelonLoader\Il2CppAssemblies</Interop>
   </PropertyGroup>
   <ItemGroup>
-    <EmbeddedResource Include="admin.html" LogicalName="MaydayHostControl.admin.html" />
     <EmbeddedResource Include="Locales\*.json" LogicalName="MaydayHostControl.Locales.%(Filename)%(Extension)" />
     <Reference Include="MelonLoader"><HintPath>$(MelonNet)\MelonLoader.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="0Harmony"><HintPath>$(MelonNet)\0Harmony.dll</HintPath><Private>false</Private></Reference>

@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Net;
+using System.Net.Http;
+using System.Text.Json;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -37,11 +40,28 @@ namespace MaydayHostControl
         private static bool PreviousCursorVisible;
         private static bool PreviousLookCaptured;
         private static RectTransform GuiRoot;
+        private static RectTransform GuiCardRoot;
         private static CanvasGroup GuiCanvasGroup;
         private static bool GuiClosing;
         private static bool GuiLanguageRefreshPending;
+
+        // ---- Update check (GitHub Releases) ---------------------------------
+        private const string UpdateApiUrl = "https://api.github.com/repos/ChEnLeo-7/Mayday-Host-Control/releases/latest";
+        private const string UpdateRepoUrl = "https://github.com/ChEnLeo-7/Mayday-Host-Control";
+
+        private enum UpdateCheckStatus { NotChecked, Checking, UpToDate, Available, NoRelease, Failed }
+
+        private static readonly object UpdateGate = new();
+        private static UpdateCheckStatus UpdateStatus = UpdateCheckStatus.NotChecked;
+        private static string UpdateLatestVersion = string.Empty;
+        private static string UpdateReleaseUrl = string.Empty;
+        private static DateTime UpdateCheckedUtc;
+        private static bool UpdateAutoCheckDone;
+        private static volatile bool UpdateRefreshPending;
         private static RectTransform GuiContent;
         private static RectTransform GuiPageContent;
+        private static RectTransform GuiItemsContent;
+        private static ScrollRect GuiMainScroll;
         private static CanvasGroup GuiContentVisibility;
         private static RectTransform GuiScreenLayer;
         private static UIButton[] GuiNavButtons;
@@ -67,6 +87,20 @@ namespace MaydayHostControl
         private static UIButton SaveRoomApplyButton;
         private static TMP_InputField RoomNameInputField;
         private static TMP_InputField CapacityInputField;
+        private static TMP_InputField MoneyInputField;
+        private static TMP_InputField GrantQuantityInputField;
+        private static TMP_InputField GrantItemSearchInputField;
+        private static string SelectedGrantSteamId = string.Empty;
+        private static string SelectedGrantItemId = string.Empty;
+        private static string GrantQuantityText = "1";
+        private static string GrantItemSearchText = string.Empty;
+        private static string GrantStatus = string.Empty;
+        private sealed class GrantTarget
+        {
+            public string Key;
+            public string Name;
+            public Il2CppMayday.PlayerNet Player;
+        }
         private static UIToggle RoomJoinableToggle;
         private static int RoomJoinableVisualRefreshFrame = -1;
         private static UIButton EliminateAllFooterButton;
@@ -84,7 +118,7 @@ namespace MaydayHostControl
         private static TMP_Text OverviewFlightLegValue;
         private static TMP_Text OverviewMoneyValue;
 
-        private static readonly string[] GuiTabs = { "Overview", "Players", "Room", "Settings" };
+        private static readonly string[] GuiTabs = { "Overview", "Players", "Room", "Items", "Settings" };
 
         private static class NativeInput
         {
@@ -295,6 +329,12 @@ namespace MaydayHostControl
         public override void OnUpdate()
         {
             if (GuiLanguageRefreshPending) RefreshLocalizedShell();
+            // Apply the result of the background update check on the main thread.
+            if (UpdateRefreshPending)
+            {
+                UpdateRefreshPending = false;
+                if (GuiVisible && GuiTab == SettingsTabIndex) RebuildContent();
+            }
             TryInstallPauseMenuButton();
             TryInstallMainMenuHostButton();
             if (GuiVisible)
@@ -305,6 +345,8 @@ namespace MaydayHostControl
                 UpdatePlayerCardUi();
                 if (GuiTab == 0 && Time.unscaledTime >= NextOverviewRefreshTime) RefreshOverviewMetrics();
                 RefreshFocusedRoomInputs();
+                RefreshItemUi();
+                RefreshPanelHoverStyles();
                 HandleBlankPanelClick();
                 var uiRoot = UIRoot.Instance;
                 if (!CanOpenHostPanel || PanelOpenedForDefaults != CanConfigureNextRoom || uiRoot == null || uiRoot.ScreenLayer == null || GuiRoot == null || GuiScreenLayer != uiRoot.ScreenLayer)
@@ -351,17 +393,60 @@ namespace MaydayHostControl
 
         internal static bool IsListPointerHeld => (NativeInput.GetAsyncKeyState(0x01) & 0x8000) != 0;
 
+        private static void RefreshPanelHoverStyles()
+        {
+            if (GuiCardRoot == null) return;
+            var buttons = GuiCardRoot.GetComponentsInChildren<UIButton>(true);
+            for (var i = 0; i < buttons.Length; i++)
+            {
+                var button = buttons[i];
+                if (button == null) continue;
+                // Hover darkens the current base color without replacing the native selected palette.
+                var background = button.selected ? button.bgSelected : button.bgNormal;
+                button.bgHover = Color.Lerp(background, UITheme.Ink, 0.07f);
+                if (button.Ring != null) button.Ring.enabled = false;
+                foreach (var outline in button.GetComponentsInChildren<Outline>(true))
+                    outline.enabled = false;
+                foreach (var effect in button.GetComponentsInChildren<UISelectFx>(true))
+                {
+                    effect.enabled = false;
+                    if (effect.ring != null) effect.ring.enabled = false;
+                    foreach (var outline in effect.GetComponentsInChildren<Outline>(true))
+                        outline.enabled = false;
+                }
+            }
+        }
+
         public override void OnLateUpdate()
         {
             SmoothListScroll.Prune();
+            RefreshItemPointerVisuals();
+            if (GuiVisible) RefreshNavigationFocusEffects();
             RestoreCursorAfterReturningToGame();
+        }
+
+        private static void RefreshNavigationFocusEffects()
+        {
+            if (GuiNavButtons == null) return;
+            for (var i = 0; i < GuiNavButtons.Length; i++)
+            {
+                var button = GuiNavButtons[i];
+                if (button == null) continue;
+                if (button.Ring != null) button.Ring.enabled = false;
+                foreach (var outline in button.GetComponentsInChildren<Outline>(true))
+                    outline.enabled = false;
+                foreach (var effect in button.GetComponentsInChildren<UISelectFx>(true))
+                {
+                    effect.enabled = false;
+                    if (effect.ring != null) effect.ring.enabled = false;
+                }
+            }
         }
 
         public override void OnDeinitializeMelon()
         {
             SetGuiVisible(false);
             Running = false;
-            try { Web?.Stop(); } catch { }
             if (GuiRoot != null) UnityEngine.Object.Destroy(GuiRoot.gameObject);
             GuiRoot = null;
             Log?.LogInfo("[MaydayHostControl] 已卸载");
@@ -575,6 +660,10 @@ namespace MaydayHostControl
 
         private static void ClearNativeScreenReferences()
         {
+            ResetItemUi();
+            GuiCardRoot = null;
+            ItemFavoritesHeaderButton = null;
+            ItemPopupRoot = null;
             MainPanelInteraction = null;
             BlacklistWindow = null;
             BlacklistContent = null;
@@ -588,6 +677,10 @@ namespace MaydayHostControl
             ResetOverviewReferences();
             RoomNameInputField = null;
             CapacityInputField = null;
+            MoneyInputField = null;
+            GrantQuantityInputField = null;
+            GrantItemSearchInputField = null;
+            GrantStatus = string.Empty;
             RoomJoinableToggle = null;
             RoomJoinableVisualRefreshFrame = -1;
             SaveRoomButton = null;
@@ -595,6 +688,8 @@ namespace MaydayHostControl
             GuiNavButtons = null;
             GuiContent = null;
             GuiPageContent = null;
+            GuiItemsContent = null;
+            GuiMainScroll = null;
             GuiContentVisibility = null;
             GuiCanvasGroup = null;
             GuiRoot = null;
@@ -666,6 +761,7 @@ namespace MaydayHostControl
             UIF.Dimmer(GuiRoot, 0.55f);
 
             var card = UIF.Panel(GuiRoot, "Card", UITheme.Paper, UITheme.RadiusLarge, true, true);
+            GuiCardRoot = card.Root;
             MainPanelInteraction = card.Root.gameObject.AddComponent<CanvasGroup>();
             UIF.At(card.Root, UIF.Center, Vector2.zero, new Vector2(1180f, 900f));
 
@@ -687,6 +783,7 @@ namespace MaydayHostControl
                 GuiNavButtons[i] = NativeButton(card.Root, "Tab" + i, Loc.T(GuiTabs[i]), ButtonStyle.Tab,
                     tabsX + i * (tabWidth + tabGap), 132f, tabWidth, 54f, () =>
                 {
+                    if (tabIndex == ItemsTabIndex) ItemFavoritesPage = false;
                     GuiTab = tabIndex;
                     GuiConfirmRecoveryId = null;
                     GuiConfirmDeleteId = null;
@@ -702,6 +799,11 @@ namespace MaydayHostControl
             contentScroll.vertical = true;
             SmoothListScroll.Register(contentScroll);
             SmoothListScroll.SetEnabled(contentScroll, false);
+            GuiMainScroll = contentScroll;
+            GuiItemsContent = UIF.Rect("ItemsPageContent", card.Root);
+            UIF.At(GuiItemsContent, UIF.TopLeft, new Vector2(32f, -194f), new Vector2(NativeContentWidth, 522f));
+            UIF.VLayout(GuiItemsContent.gameObject, 0f, UIF.Pad(6, 6, 0, 0), TextAnchor.UpperLeft, true, true, false, false);
+            GuiItemsContent.gameObject.SetActive(false);
             GuiContent = GuiPageContent;
             GuiContentVisibility = GuiContent.gameObject.GetComponent<CanvasGroup>();
             if (GuiContentVisibility == null) GuiContentVisibility = GuiContent.gameObject.AddComponent<CanvasGroup>();
@@ -729,8 +831,21 @@ namespace MaydayHostControl
         private static void RebuildContent()
         {
             if (GuiContent == null) return;
-            SmoothListScroll.SetEnabled(GuiContent.GetComponentInParent<ScrollRect>(), NetworkServer.activeHost && GuiTab == 1);
+            CloseItemPopup();
+            if (ItemFavoritesHeaderButton != null)
+                ItemFavoritesHeaderButton.gameObject.SetActive(GuiTab == ItemsTabIndex);
+            DestroyItemDock();
             var contentWasVisible = GuiContentVisibility == null || GuiContentVisibility.alpha > 0.99f;
+            var previousContent = GuiContent;
+            var itemsTab = GuiTab == ItemsTabIndex;
+            GuiMainScroll.gameObject.SetActive(!itemsTab);
+            GuiItemsContent.gameObject.SetActive(itemsTab);
+            GuiContent = itemsTab ? GuiItemsContent : GuiPageContent;
+            GuiContentVisibility = GuiContent.GetComponent<CanvasGroup>();
+            if (GuiContentVisibility == null) GuiContentVisibility = GuiContent.gameObject.AddComponent<CanvasGroup>();
+            SmoothListScroll.SetEnabled(GuiMainScroll, NetworkServer.activeHost && GuiTab == 1);
+            ItemGridScroll = null;
+            ItemGridRoot = null;
             if (GuiContentVisibility != null)
             {
                 GuiContentVisibility.alpha = 0f;
@@ -746,22 +861,23 @@ namespace MaydayHostControl
             ResetOverviewReferences();
             RoomNameInputField = null;
             CapacityInputField = null;
+            MoneyInputField = null;
+            GrantQuantityInputField = null;
+            GrantItemSearchInputField = null;
+            GrantStatus = string.Empty;
             RoomJoinableToggle = null;
             RoomJoinableVisualRefreshFrame = -1;
-            for (var i = GuiContent.childCount - 1; i >= 0; i--)
-            {
-                var child = GuiContent.GetChild(i).gameObject;
-                child.SetActive(false);
-                UnityEngine.Object.Destroy(child);
-            }
+            ClearPageChildren(previousContent);
+            if (GuiContent != previousContent) ClearPageChildren(GuiContent);
             for (var i = 0; i < GuiNavButtons.Length; i++)
             {
                 if (GuiNavButtons[i] == null) continue;
-                GuiNavButtons[i].SetInteractable(!PanelOpenedForDefaults || i == 2 || i == 3);
+                GuiNavButtons[i].SetInteractable(!PanelOpenedForDefaults || i == 2 || i == 4);
                 GuiNavButtons[i].SetSelected(i == GuiTab);
+                if (GuiNavButtons[i].Ring != null) GuiNavButtons[i].Ring.enabled = false;
             }
 
-            if (!NetworkServer.activeHost && !(PanelOpenedForDefaults && (GuiTab == 2 || GuiTab == 3)))
+            if (!NetworkServer.activeHost && !(PanelOpenedForDefaults && (GuiTab == 2 || GuiTab == 4)))
             {
                 NativeSettingsSection(GuiContent, Loc.T("Host permissions"));
                 NativeDisplayRow(GuiContent, Loc.T("Status"), Loc.T("Create a single-player or Steam room on this computer first."), true);
@@ -774,25 +890,37 @@ namespace MaydayHostControl
                 case 0: BuildOverview(); break;
                 case 1: BuildPlayers(); break;
                 case 2: BuildRoom(); break;
-                case 3: BuildSettings(); break;
+                case 3: BuildItems(); break;
+                case 4: BuildSettings(); break;
             }
             UpdateRoomSaveButtons();
             if (contentWasVisible) FinishAdaptiveLayoutAfterRebuild();
         }
 
+        private static void ClearPageChildren(RectTransform content)
+        {
+            for (var i = content.childCount - 1; i >= 0; i--)
+            {
+                var child = content.GetChild(i).gameObject;
+                child.SetActive(false);
+                UnityEngine.Object.Destroy(child);
+            }
+        }
+
         private static void StabilizeContentLayout()
         {
             Canvas.ForceUpdateCanvases();
-            LayoutRebuilder.ForceRebuildLayoutImmediate(GuiPageContent);
+            LayoutRebuilder.ForceRebuildLayoutImmediate(GuiContent);
             RefreshAdaptiveLayout(force: true);
             Canvas.ForceUpdateCanvases();
-            LayoutRebuilder.ForceRebuildLayoutImmediate(GuiPageContent);
+            LayoutRebuilder.ForceRebuildLayoutImmediate(GuiContent);
 
             // The first pass assigns final widths. Re-measure wrapped text against those widths before showing.
             RefreshAdaptiveLayout(force: true);
             if (GuiTab == 1) FitPersonCards(GuiContent);
             Canvas.ForceUpdateCanvases();
-            LayoutRebuilder.ForceRebuildLayoutImmediate(GuiPageContent);
+            LayoutRebuilder.ForceRebuildLayoutImmediate(GuiContent);
+            if (GuiTab == ItemsTabIndex) FitItemGrid();
         }
 
         private static void FinishAdaptiveLayoutAfterRebuild()
@@ -1065,6 +1193,17 @@ namespace MaydayHostControl
             if (changed) UpdateRoomSaveButtons();
         }
 
+        private static void RefreshGrantSearchInput()
+        {
+            if (!GuiVisible || GuiTab != 3 || GrantItemSearchInputField == null || !GrantItemSearchInputField.isFocused) return;
+            var value = GrantItemSearchInputField.text ?? string.Empty;
+            if (GrantItemSearchText != value)
+            {
+                GrantItemSearchText = value;
+                RebuildContent();
+            }
+        }
+
         private static void HandleBlankPanelClick()
         {
             var down = (NativeInput.GetAsyncKeyState(0x01) & 0x8000) != 0;
@@ -1180,8 +1319,6 @@ namespace MaydayHostControl
                 if (result.Contains("失败") || result.Contains("没有可修改")) failures.Add(Loc.T("Visibility: {0}", Loc.RecoveryMessage(result)));
             }
 
-            NextStatusRefreshUtc = DateTime.MinValue;
-            RefreshWebSnapshot();
             if (failures.Count > 0)
             {
                 GuiStatus = Loc.T("Some settings were not applied: {0}", string.Join("; ", failures));
@@ -1321,6 +1458,49 @@ namespace MaydayHostControl
             }
         }
 
+        private static Il2CppMayday.ItemInfo[] GetGrantableItemInfos()
+        {
+            try
+            {
+                if (!ItemCatalogReady) { Il2CppMayday.ItemCatalog.Build(); ItemCatalogReady = true; }
+                var result = new List<Il2CppMayday.ItemInfo>();
+                var all = Il2CppMayday.ItemCatalog.all;
+                if (all == null) return Array.Empty<Il2CppMayday.ItemInfo>();
+                for (var i = 0; i < all.Count; i++)
+                {
+                    var item = all[i];
+                    if (item != null && !string.IsNullOrWhiteSpace(item.id) && IsGrantableItemId(item.id)) result.Add(item);
+                }
+                return result.OrderBy(x => x.category.ToString()).ThenBy(x => x.DisplayName).ToArray();
+            }
+            catch (Exception e)
+            {
+                Log?.LogWarning("[MaydayHostControl] failed to build grant item list: " + e.Message);
+                return Array.Empty<Il2CppMayday.ItemInfo>();
+            }
+        }
+
+        private static string GetGrantItemDisplayName(Il2CppMayday.ItemInfo item)
+        {
+            return item == null || string.IsNullOrWhiteSpace(item.DisplayName) ? (item?.id ?? string.Empty) : item.DisplayName;
+        }
+
+        private static string GetGrantItemDisplayName(Il2CppMayday.ItemInfo[] items, string id)
+        {
+            var item = items?.FirstOrDefault(x => x != null && x.id == id);
+            return GetGrantItemDisplayName(item);
+        }
+
+        private static bool MatchesGrantItemSearch(Il2CppMayday.ItemInfo item, string search)
+        {
+            if (item == null) return false;
+            if (string.IsNullOrWhiteSpace(search)) return true;
+            var value = search.Trim();
+            return (item.DisplayName ?? string.Empty).IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   (item.id ?? string.Empty).IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   item.category.ToString().IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
         private static void BuildSettings()
         {
             NativeSettingsSection(GuiContent, Loc.T("Language"));
@@ -1341,6 +1521,240 @@ namespace MaydayHostControl
             NativeButton(shortcutControl, "ShortcutCapture", GuiShortcutCapture ? Loc.T("Waiting for key…") : PanelShortcutDisplay,
                 GuiShortcutCapture ? ButtonStyle.Primary : ButtonStyle.Secondary, 220f, 42f,
                 () => { if (!GuiShortcutCapture) BeginShortcutCapture(); });
+
+            if (NetworkServer.activeHost)
+            {
+                NativeSettingsSection(GuiContent, Loc.T("Additional settings"));
+                var state = Il2CppMayday.GameState.Instance;
+                var currentMoney = state != null ? state.Money : 0;
+                var moneyControl = NewNativeSettingRow(GuiContent, "Money", Loc.T("Set game money"),
+                    Loc.T("Current money: {0}", currentMoney), 68f);
+                MoneyInputField = UIF.Input(moneyControl, "MoneyInput", currentMoney.ToString(), "0", 10,
+                    NativeStringAction(value =>
+                    {
+                        var digits = new string((value ?? string.Empty).Where(char.IsDigit).Take(10).ToArray());
+                        if (MoneyInputField != null && MoneyInputField.text != digits) MoneyInputField.text = digits;
+                    }), 220f, 48f);
+                NativeButton(moneyControl, "ApplyMoney", Loc.T("Apply"), ButtonStyle.Primary, 140f, 42f, () =>
+                {
+                    var text = MoneyInputField != null ? MoneyInputField.text : string.Empty;
+                    if (!int.TryParse(text, out var target) || target < 0)
+                    {
+                        GuiStatus = Loc.T("Money must be between 0 and {0}", int.MaxValue);
+                        RebuildContent();
+                        return;
+                    }
+                    RunPanelAction(() => ApplyMoney(target));
+                });
+
+            }
+
+            BuildUpdateSection();
+        }
+
+        private static void BuildUpdateSection()
+        {
+            NativeSettingsSection(GuiContent, Loc.T("Updates"));
+            // Auto-check once per session, only when a host opens the Settings tab inside a room.
+            if (!UpdateAutoCheckDone && NetworkServer.activeHost && !PanelOpenedForDefaults)
+            {
+                UpdateAutoCheckDone = true;
+                StartUpdateCheck();
+            }
+            var control = NewNativeSettingRow(GuiContent, "UpdateCheck", Loc.T("Check for updates"), UpdateDescriptionText(), 64f);
+            var button = NativeButton(control, "UpdateCheckButton", UpdateButtonText(), ButtonStyle.Secondary, 240f, 42f, OnUpdateCheckClicked);
+            ApplyUpdateButtonStyle(button);
+        }
+
+        private static string UpdateDescriptionText()
+        {
+            var current = Loc.T("Current version: {0}", Version);
+            lock (UpdateGate)
+            {
+                switch (UpdateStatus)
+                {
+                    case UpdateCheckStatus.Checking: return current + " · " + Loc.T("Checking…");
+                    case UpdateCheckStatus.UpToDate: return current + " · " + Loc.T("Up to date");
+                    case UpdateCheckStatus.Available: return current + " · " + Loc.T("Open download page");
+                    case UpdateCheckStatus.NoRelease: return current + " · " + Loc.T("No release published yet");
+                    default: return current;
+                }
+            }
+        }
+
+        private static string UpdateButtonText()
+        {
+            lock (UpdateGate)
+            {
+                switch (UpdateStatus)
+                {
+                    case UpdateCheckStatus.Checking: return Loc.T("Checking…");
+                    case UpdateCheckStatus.UpToDate: return Loc.T("Up to date");
+                    case UpdateCheckStatus.Available: return Loc.T("New version {0}", UpdateLatestVersion);
+                    case UpdateCheckStatus.NoRelease: return Loc.T("No release published yet");
+                    case UpdateCheckStatus.Failed: return Loc.T("Check failed · Retry");
+                    default: return Loc.T("Check for updates");
+                }
+            }
+        }
+
+        private static void ApplyUpdateButtonStyle(UIButton button)
+        {
+            if (button == null) return;
+            // The game's focus ring draws an outline around a button after a click; the update entry is
+            // not a toggle, so its ring is removed from the hierarchy instead of only disabled.
+            if (button.Ring != null) button.Ring.gameObject.SetActive(false);
+            lock (UpdateGate)
+            {
+                switch (UpdateStatus)
+                {
+                    case UpdateCheckStatus.Available:
+                        button.SetInteractable(true);
+                        SetPlayerActionColors(button, KickRed, Color.white);
+                        break;
+                    case UpdateCheckStatus.Checking:
+                        button.SetInteractable(false);
+                        SetPlayerActionColors(button, UITheme.PaperDk, UITheme.InkSoft);
+                        break;
+                    case UpdateCheckStatus.UpToDate:
+                    case UpdateCheckStatus.NoRelease:
+                        button.SetInteractable(true);
+                        SetPlayerActionColors(button, new Color(0f, 0f, 0f, 0f), UITheme.InkSoft);
+                        break;
+                    default:
+                        button.SetInteractable(true);
+                        SetPlayerActionColors(button, UITheme.PaperDk, UITheme.Ink);
+                        break;
+                }
+            }
+        }
+
+        private static void OnUpdateCheckClicked()
+        {
+            string url;
+            lock (UpdateGate)
+            {
+                if (UpdateStatus == UpdateCheckStatus.Checking) return;
+                url = UpdateStatus == UpdateCheckStatus.Available ? UpdateReleaseUrl : null;
+            }
+            if (!string.IsNullOrEmpty(url))
+            {
+                try
+                {
+                    Application.OpenURL(url);
+                    LogEvent("update-open-release", "url=" + url);
+                }
+                catch (Exception e) { Log?.LogWarning("[MaydayHostControl] open release url failed: " + e.Message); }
+                return;
+            }
+            StartUpdateCheck();
+            UpdateRefreshPending = true;
+        }
+
+        private static void StartUpdateCheck()
+        {
+            lock (UpdateGate)
+            {
+                if (UpdateStatus == UpdateCheckStatus.Checking) return;
+                UpdateStatus = UpdateCheckStatus.Checking;
+                UpdateLatestVersion = string.Empty;
+                UpdateReleaseUrl = string.Empty;
+            }
+            try
+            {
+                var thread = new System.Threading.Thread(CheckUpdateWorker) { IsBackground = true, Name = "MaydayHostControlUpdateCheck" };
+                thread.Start();
+            }
+            catch (Exception e)
+            {
+                Log?.LogWarning("[MaydayHostControl] update check thread failed: " + e.Message);
+                lock (UpdateGate) UpdateStatus = UpdateCheckStatus.Failed;
+                UpdateRefreshPending = true;
+            }
+        }
+
+        private static void CheckUpdateWorker()
+        {
+            var status = UpdateCheckStatus.Failed;
+            var latest = string.Empty;
+            var url = string.Empty;
+            try
+            {
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("MaydayHostControl/" + Version);
+                client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+                using var response = client.GetAsync(UpdateApiUrl).GetAwaiter().GetResult();
+                if (response.StatusCode == HttpStatusCode.NotFound)
+                {
+                    status = UpdateCheckStatus.NoRelease;
+                }
+                else if (!response.IsSuccessStatusCode)
+                {
+                    Log?.LogWarning("[MaydayHostControl] update check http " + (int)response.StatusCode);
+                }
+                else
+                {
+                    var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                    using var document = JsonDocument.Parse(body);
+                    var root = document.RootElement;
+                    if (root.TryGetProperty("tag_name", out var tag)) latest = ExtractVersion(tag.GetString());
+                    if (root.TryGetProperty("html_url", out var page)) url = page.GetString() ?? string.Empty;
+                    if (!IsAllowedReleaseUrl(url)) url = string.Empty;
+                    if (latest.Length == 0 || url.Length == 0)
+                    {
+                        Log?.LogWarning("[MaydayHostControl] update check malformed release payload");
+                    }
+                    else
+                    {
+                        status = CompareVersions(latest, Version) > 0 ? UpdateCheckStatus.Available : UpdateCheckStatus.UpToDate;
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Log?.LogWarning("[MaydayHostControl] update check failed: " + e.Message);
+                status = UpdateCheckStatus.Failed;
+            }
+            lock (UpdateGate)
+            {
+                UpdateStatus = status;
+                UpdateLatestVersion = latest;
+                UpdateReleaseUrl = url;
+                UpdateCheckedUtc = DateTime.UtcNow;
+            }
+            UpdateRefreshPending = true;
+            LogEvent("update-check", "status=" + status + " latest=" + (latest.Length > 0 ? latest : "-") + " checkedUtc=" + UpdateCheckedUtc.ToString("O"));
+        }
+
+        private static string ExtractVersion(string raw)
+        {
+            if (string.IsNullOrEmpty(raw)) return string.Empty;
+            var match = System.Text.RegularExpressions.Regex.Match(raw, @"\d+\.\d+\.\d+");
+            return match.Success ? match.Value : string.Empty;
+        }
+
+        private static bool IsAllowedReleaseUrl(string url)
+        {
+            return !string.IsNullOrEmpty(url)
+                && url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+                && url.StartsWith(UpdateRepoUrl + "/releases/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static int CompareVersions(string left, string right)
+        {
+            if (!TryParseVersion(left, out var lm, out var ln, out var lp)) return -1;
+            if (!TryParseVersion(right, out var rm, out var rn, out var rp)) return 1;
+            if (lm != rm) return lm.CompareTo(rm);
+            if (ln != rn) return ln.CompareTo(rn);
+            return lp.CompareTo(rp);
+        }
+
+        private static bool TryParseVersion(string value, out int major, out int minor, out int patch)
+        {
+            major = minor = patch = 0;
+            if (string.IsNullOrEmpty(value)) return false;
+            var parts = value.Split('.');
+            return parts.Length == 3 && int.TryParse(parts[0], out major) && int.TryParse(parts[1], out minor) && int.TryParse(parts[2], out patch);
         }
 
         private static void RunPanelAction(Func<string> action) => RunPanelAction(action, false);
@@ -1353,8 +1767,6 @@ namespace MaydayHostControl
             {
                 var result = action();
                 GuiStatus = alreadyLocalized ? result : Loc.RecoveryMessage(result);
-                NextStatusRefreshUtc = DateTime.MinValue;
-                RefreshWebSnapshot();
             }
             catch (Exception e)
             {
@@ -1384,43 +1796,63 @@ namespace MaydayHostControl
             const float gap = 8f;
             const float padding = 24f;
             var visibleIndices = PanelOpenedForDefaults
-                ? new[] { 2, 3 }
+                ? new[] { 2, 4 }
                 : Enumerable.Range(0, GuiNavButtons.Length).ToArray();
             foreach (var i in Enumerable.Range(0, GuiNavButtons.Length))
                 if (GuiNavButtons[i] != null) GuiNavButtons[i].gameObject.SetActive(visibleIndices.Contains(i));
 
-            var naturalWidths = new float[visibleIndices.Length];
-            var total = gap * Math.Max(0, visibleIndices.Length - 1);
+            var textWidths = new float[visibleIndices.Length];
+            var texts = new TMP_Text[visibleIndices.Length];
+            var naturalTotal = gap * Math.Max(0, visibleIndices.Length - 1);
             for (var j = 0; j < visibleIndices.Length; j++)
             {
                 var text = GuiNavButtons[visibleIndices[j]].GetComponentInChildren<TMP_Text>();
+                texts[j] = text;
                 if (text == null) continue;
                 text.enableAutoSizing = false;
                 text.enableWordWrapping = false;
                 text.overflowMode = TextOverflowModes.Overflow;
-                naturalWidths[j] = Mathf.Max(120f, text.GetPreferredValues(text.text, float.PositiveInfinity, 60f).x + padding);
-                total += naturalWidths[j];
+                text.fontSize = UITheme.SizeBody;
+                textWidths[j] = text.GetPreferredValues(text.text, float.PositiveInfinity, 60f).x;
+                naturalTotal += Mathf.Max(120f, textWidths[j] + padding);
             }
-            var scale = Mathf.Min(1f, bounds / Mathf.Max(1f, total));
-            var widths = naturalWidths.Select(w => Mathf.Max(120f, w * scale)).ToArray();
-            var maxTextWidth = naturalWidths.Length == 0 ? 1f : naturalWidths.Max() - padding;
-            var commonFontScale = Mathf.Min(1f, widths.Min() / Mathf.Max(1f, maxTextWidth));
-            var tabAreaWidth = widths.Sum() + gap * Math.Max(0, visibleIndices.Length - 1);
+            var commonFontScale = 1f;
+            if (naturalTotal > bounds)
+            {
+                var low = 0f;
+                var high = 1f;
+                for (var iteration = 0; iteration < 12; iteration++)
+                {
+                    var candidateScale = (low + high) * 0.5f;
+                    var candidateTotal = gap * Math.Max(0, visibleIndices.Length - 1);
+                    for (var j = 0; j < visibleIndices.Length; j++)
+                        candidateTotal += Mathf.Max(120f, textWidths[j] * candidateScale + padding);
+                    if (candidateTotal <= bounds) low = candidateScale;
+                    else high = candidateScale;
+                }
+                commonFontScale = low;
+            }
+            var widths = new float[visibleIndices.Length];
+            var tabAreaWidth = gap * Math.Max(0, visibleIndices.Length - 1);
+            for (var j = 0; j < visibleIndices.Length; j++)
+            {
+                widths[j] = Mathf.Max(120f, textWidths[j] * commonFontScale + padding);
+                tabAreaWidth += widths[j];
+            }
             var x = left + Mathf.Max(0f, (bounds - tabAreaWidth) * 0.5f);
-            var tabY = GuiNavButtons[visibleIndices[0]].GetComponent<RectTransform>().anchoredPosition.y;
+            const float tabY = -132f;
             for (var j = 0; j < visibleIndices.Length; j++)
             {
                 var button = GuiNavButtons[visibleIndices[j]];
                 var rect = button.GetComponent<RectTransform>();
-                var text = button.GetComponentInChildren<TMP_Text>();
+                var text = texts[j];
                 if (rect == null || text == null) continue;
                 rect.sizeDelta = new Vector2(widths[j], 54f);
                 rect.anchoredPosition = new Vector2(x, tabY);
-                text.enableAutoSizing = true;
+                text.enableAutoSizing = false;
                 text.enableWordWrapping = false;
                 text.overflowMode = TextOverflowModes.Overflow;
-                text.fontSizeMax = UITheme.SizeBody * commonFontScale;
-                text.fontSizeMin = Mathf.Min(text.fontSizeMax, UITheme.SizeSmall * 0.7f);
+                text.fontSize = UITheme.SizeBody * commonFontScale;
                 text.ForceMeshUpdate();
                 x += widths[j] + gap;
             }
@@ -1720,6 +2152,19 @@ namespace MaydayHostControl
             const float reviveX = 456f;
             const float blacklistX = 690f;
             const float reviveMaxWidth = blacklistX - gap - reviveX;
+            if (CloseFooterButton != null)
+            {
+                var itemsTab = GuiTab == ItemsTabIndex;
+                var closeText = CloseFooterButton.GetComponentInChildren<TMP_Text>();
+                if (closeText != null)
+                {
+                    closeText.enableAutoSizing = !itemsTab;
+                    closeText.fontSize = closeText.fontSizeMax;
+                    closeText.overflowMode = itemsTab ? TextOverflowModes.Overflow : TextOverflowModes.Truncate;
+                }
+                var width = itemsTab ? ItemButtonWidth(CloseFooterButton, 144f, 48f) : 260f;
+                PlaceFooterButton(CloseFooterButton, 1148f - width, width);
+            }
             if (!NetworkServer.activeHost || GuiTab != 1)
             {
                 // Reset to the original footer slots on every non-player tab, including the room tab.
@@ -1727,7 +2172,6 @@ namespace MaydayHostControl
                 PlaceFooterButton(KickAllFooterButton, 244f, 200f);
                 PlaceFooterButton(RespawnAllFooterButton, reviveX, 200f);
                 PlaceFooterButton(BlacklistFooterButton, blacklistX, 188f);
-                PlaceFooterButton(CloseFooterButton, 888f, 260f);
                 return;
             }
             // Keep the established slots for the existing player actions; only the revive action sizes to its label.
@@ -1824,7 +2268,10 @@ namespace MaydayHostControl
         private static void FocusCurrentTab()
         {
             if (GuiNavButtons != null && GuiTab >= 0 && GuiTab < GuiNavButtons.Length && GuiNavButtons[GuiTab] != null)
+            {
                 UIScreen.Select(GuiNavButtons[GuiTab].gameObject);
+                if (GuiNavButtons[GuiTab].Ring != null) GuiNavButtons[GuiTab].Ring.enabled = false;
+            }
         }
     }
 

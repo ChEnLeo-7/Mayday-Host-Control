@@ -41,9 +41,14 @@ namespace MaydayHostControl
         private static void SetPlayerActionColors(UIButton button, Color background, Color foreground)
         {
             button.bgNormal = background;
-            button.bgHover = Color.Lerp(background, Color.white, 0.12f);
-            button.bgPress = Color.Lerp(background, Color.black, 0.15f);
-            button.bgSelected = button.bgHover;
+            button.bgHover = Color.Lerp(background, UITheme.Ink, 0.07f);
+            button.bgPress = Color.Lerp(background, UITheme.Ink, 0.10f);
+            button.bgSelected = background;
+            button.bgDisabled = background;
+            button.hoverScale = Mathf.Max(button.hoverScale, 1.02f);
+            if (button.Ring != null) button.Ring.enabled = false;
+            var outline = button.GetComponent<Outline>();
+            if (outline != null) outline.enabled = false;
             button.fgNormal = foreground;
             button.fgHover = foreground;
             button.fgSelected = foreground;

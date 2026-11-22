@@ -1,4 +1,4 @@
-# 更好的房主管理 0.5.27
+# 更好的房主管理 0.5.69
 
 [English](README.en.md) | 简体中文
 
@@ -11,24 +11,29 @@
 
 ## 界面预览
 
-以下截图使用英文界面；面板本身支持 11 种语言。
+以下为**简体中文**界面截图；英文界面见 [English](README.en.md)。面板共支持 11 种语言。
 
 <p align="center">
-  <img src="assets/screenshots/overview.png" width="49%" alt="总览页" />
-  <img src="assets/screenshots/players.png" width="49%" alt="玩家页" />
+  <img src="assets/screenshots/zh/overview.png" width="49%" alt="总览页" />
+  <img src="assets/screenshots/zh/players.png" width="49%" alt="玩家页" />
 </p>
 <p align="center">
-  <img src="assets/screenshots/room-defaults.png" width="49%" alt="房间 / 下次开房设置" />
-  <img src="assets/screenshots/settings.png" width="49%" alt="设置页" />
+  <img src="assets/screenshots/zh/room.png" width="49%" alt="房间页" />
+  <img src="assets/screenshots/zh/items.png" width="49%" alt="物品页" />
+</p>
+<p align="center">
+  <img src="assets/screenshots/zh/settings.png" width="49%" alt="设置页" />
 </p>
 
 ## 功能
 
-- 游戏内原生 UI，不启动 HTTP 服务，不依赖外部网页。
+- 游戏内原生 UI；无网页端、无本地 HTTP 服务、无外部依赖。
 - **总览**：在线远程玩家、房间容量、允许加入、航班阶段/航段/资金。
 - **玩家**：踢出、全部踢出、淘汰、全部淘汰、一键复活、拉黑/解除、Steam 资料/加好友。
 - **房间**：实时房间名、容量 1-250、允许加入、Private/FriendsOnly/Public 可见性。
-- **设置**：11 种面板语言、快捷键重绑定。
+- **物品**：物品网格、按名称/ID/分类搜索、按 ID 刷出、发放设置（目标玩家/数量/背包或地面）、收藏与收藏页。
+- **设置**：11 种面板语言、快捷键重绑定、检查更新（读取 GitHub Releases）。
+- **更新检查**：房主首次在房间内打开“设置”页时自动检查一次；之后只能手动点击。发现新版本时按钮变红，点击用默认浏览器打开对应 Release 页面，不自动下载或安装。
 - **大厅预设**：保存下次开房的名称、容量、允许加入和可见性。
 - 黑名单持久化；管理操作写入日志。
 - 航班存档暂未集成；未来可能整合 lansi 的存档管理。
@@ -43,7 +48,7 @@
 
 ## 安装
 
-1. 通过 Manager 导入 `Mayday-Host-Control-0.5.27.maydaymod`，启用并重启游戏。
+1. 通过 Manager 导入 `Mayday-Host-Control-0.5.69.maydaymod`，启用并重启游戏。
 2. 由安装 Mod 的玩家创建房间。
 3. 打开入口：
    - 房间内：暂停菜单（机长菜单）中“邀请好友”旁的钥匙图标“更好的房主管理”。
@@ -75,13 +80,38 @@
 - 人数上限 1-250；Steam 或游戏自身可能有更低上限，保存时以 Steam Lobby 实际接受值为准。
 - 允许加入：关闭后新玩家不能进入，已在房间内的玩家不受影响。
 - 可见性：仅邀请 / 仅好友 / 公开。实时修改 Steam Lobby 类型，外部列表传播由 Steam 完成。
-- 保存 / 保存并应用会依次应用修改；失败项写入日志。0.5.27 修复了可见性选择器回切原选项后仍保留错误待保存值的问题。
+- 保存 / 保存并应用会依次应用修改；失败项写入日志。可见性选择器回切原选项时不会保留错误的待保存值。
 - 在大厅打开时为“下次开房设置”，保存后写入本地配置，下次创建房间时应用。
+
+### 物品
+
+- 搜索框匹配物品名称、物品 ID 与分类名；右侧“按 ID”可直接输入 ID 刷出（特殊物品需再点一次确认）。
+- 分类筛选：全部、客舱、厨房、清洁、维修、行李、货箱、杂项；选中项高亮，悬浮时底色加深。
+- 物品网格每行 5 个，滚轮滚动；单击选中，底部栏显示物品图标、名称与分类。
+- 底部操作：刷出 1 件（数量在发放设置里调整）、发放设置入口（齿轮 + 当前目标/投放摘要）、收藏星标。
+- 发放设置弹窗：物品大图与 ID（点击复制）、目标玩家、数量 1-99、投放位置（背包/地面）。
+- 发放前检查目标背包空位；背包放不下的部分掉落在目标旁边，结果回显在底部栏。
+
+### 收藏
+
+- 物品页右上角“☆ 收藏”进入收藏页；在收藏页内按钮显示为实心 ★。
+- 底部栏星标可收藏/取消收藏当前物品，收藏结果持久化到本地配置。
+- 收藏页只列出已收藏物品：左上返回完整物品页，右上显示已收藏数量；空收藏时显示提示。
+- 收藏页没有搜索与分类筛选，避免与收藏集合混淆。
 
 ### 设置
 
 - 面板语言：简体中文、English、Français、Deutsch、Español、Português (Brasil)、Türkçe、Русский、日本語、한국어、Polski。切换即时生效并保存。
 - 面板快捷键：点击后按下新键绑定，`Esc` 取消。
+
+### 更新
+
+- 行内显示当前版本，右侧按钮依次表示：`检查更新` → `检查中…` → `已是最新` / `新版本 x.y.z`（红色）/ `尚未发布 Release` / `检查失败 · 重试`。
+- **自动检查**：房主在本机房间内首次打开“设置”页时自动查一次（每个游戏会话只触发一次）；之后再打开不会自动查。
+- **手动检查**：随时点击按钮；检查期间按钮禁用，避免重复请求。
+- 有新版本时按钮变红，点击用默认浏览器打开 GitHub Release 页面；本 Mod 不下载、不替换文件、不静默安装，更新仍由 Mod Manager 负责。
+- 版本来源：`GET https://api.github.com/repos/ChEnLeo-7/Mayday-Host-Control/releases/latest` 的 `tag_name`，取其中的 `x.y.z` 与本地版本比较；Release tag 统一使用 `v<版本>`（如 `v0.5.69`）。
+- 请求超时 6 秒；无网络、限流或尚无 Release 都只会在行内提示，不影响面板其它功能。
 
 ### 存档功能（暂未集成）
 
@@ -93,7 +123,8 @@
 
 - 数据目录：`UserData/MaydayHostControl/`，包含配置、黑名单、玩家标签、历史检查点和诊断包。
 - 插件只读检查仍留在游戏目录中的旧 `BepInEx/config` 存档，不移动、不删除。
-- 不启动 HTTP 服务；Steam 资料按钮会打开 Steam Overlay 或浏览器链接。
+- 不启动任何本地 HTTP 服务；Steam 资料按钮会打开 Steam Overlay 或浏览器链接。
+- 检查更新只会向 `api.github.com` 请求最新 Release（请求头里只有 User-Agent 与本地版本号），不上传 SteamID、玩家名或任何本地文件；不检查时不发起任何网络请求。
 - 日志和诊断包可能包含 SteamID、玩家名；分享前请自行脱敏。
 
 ## 从源码构建
@@ -108,7 +139,7 @@
 
 - `build.ps1` 编译到 `src\bin\Release\net6.0\Mayday.HostControl.dll`；加 `-Deploy` 会复制到游戏的 `Mods\MaydayPkg.mayday-host-control`。
 - `verify.ps1` 构建并校验 11 种语言的键和占位符。
-- `package.ps1` 生成 `dist\Mayday-Host-Control-0.5.27.maydaymod`。
+- `package.ps1` 读取 `manifest.json` 的版本号，生成 `dist\Mayday-Host-Control-<版本>.maydaymod`（当前为 `0.5.69`），并输出 SHA256。
 
 ## 仓库结构
 
@@ -118,13 +149,36 @@
 ├─ manifest.json
 ├─ README.md / README.en.md
 └─ src/
-   ├─ Plugin.cs / InGameGui.cs / PlayerCards.cs / PlayerModeration.cs
-   ├─ Localization.cs / MelonCompat.cs / SmoothListScroll.cs / AdminWebPage.cs
-   ├─ MaydayHostControl.csproj / admin.html
+   ├─ Plugin.cs / InGameGui.cs / ItemBrowser.cs / ItemNameLocalization.cs
+   ├─ PlayerCards.cs / PlayerModeration.cs
+   ├─ Localization.cs / MelonCompat.cs / SmoothListScroll.cs
+   ├─ MaydayHostControl.csproj
    └─ Locales/（11 个 JSON）
 ```
 
-## 0.5.27 更新
+## 更新记录
+
+### 0.5.69
+
+- 修复“检查更新”按钮点击后出现边框描边的问题：移除该按钮的焦点描边环。
+- 界面预览改为按语言区分的截图：中文文案使用中文界面截图，英文文案使用英文界面截图，并补充物品页。
+
+### 0.5.68
+
+- 新增“检查更新”：设置页新增“更新”分区，读取 GitHub Releases 的最新版本并与本地版本比较。
+- 房主首次在房间内打开设置页时自动检查一次；之后仅在手动点击时检查。
+- 有新版本时按钮变红并显示 `新版本 x.y.z`，点击用默认浏览器打开对应 Release 页面；不自动下载或安装。
+- 请求超时、无网络、限流或尚无 Release 都会在行内提示，不影响面板其它功能。
+
+### 0.5.67（相对 0.5.27 的主要变化）
+
+- 新增“物品”页：物品网格、名称/ID/分类搜索、按 ID 刷出、发放设置（目标玩家/数量/背包或地面）。
+- 新增收藏：物品可收藏，收藏页集中查看，结果持久化到本地配置。
+- 物品名称随面板语言本地化；未知物品回退为游戏原名或 ID。
+- 界面细节：分类标签悬浮底色加深、发放设置入口去掉底板且只在物品页显示、收藏星标改用原生图标并居中。
+- 移除旧版网页管理端遗留代码：删除 `admin.html`、`AdminWebPage.cs`，以及 `Plugin.cs` 中未启用的 `HttpListener` 监听、`/api/*` 处理、请求模型与状态快照缓存（合计约 300 行）。该网页端在 Manager 版本中从未启动，面板功能与游戏内行为不变，同时去掉了每次 UI 刷新时的状态 JSON 序列化开销。
+
+### 0.5.27
 
 - 修复房间可见性选择器回切原选项后仍保留错误待保存值的问题。
 - 新增“全部复活”按钮：任一在线远程玩家被淘汰时显示，宽度按语言自适应。
