@@ -160,12 +160,13 @@ You need the .NET 6 SDK and a game directory where MelonLoader has already gener
 
 ## Changelog
 
-### 0.6.0
+### 0.6.0 Updates
 
-- Added a complete third-person and free-camera experience with separate follow views for the aircraft cockpit, airport ground vehicles, and the player.
-- Fixed an intermittent first-person view restoration issue after leaving free camera by restoring the camera orientation and the view state captured on entry.
-- Expanded the host-control panel, player/room/item management, member-local features, and ping broadcast support while keeping update checks and localization consistent.
-- Unified the source, build verification, and distributable package at version 0.6.0.
+- Added third-person and free-camera views with dedicated follow behaviour for the aircraft cockpit, airport ground vehicles such as the baggage tug, and the player on foot.
+- Fixed an intermittent first-person view error after leaving free camera by restoring the camera orientation and the view state saved when free camera was entered.
+- Added player-control toggling, HUD hiding, and free look while the free camera is active.
+- Expanded member-local features and ping broadcast: members can use Overview, Settings, local camera, HUD, ping, and broadcast features while host permissions remain tied to the room role.
+- Integrated the player, room, item, and localization updates with the version checker, build verification, and 0.6.0 release package workflow.
 
 ### 0.5.68
 
