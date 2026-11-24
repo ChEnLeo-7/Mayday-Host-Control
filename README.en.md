@@ -1,11 +1,11 @@
-# Better Host Management 0.5.69
+# Better Host Management 0.6.0
 
 English | [简体中文](README.md)
 
 > [!IMPORTANT]
 > **Prerequisite:** This mod must be installed and enabled through [Mayday Mod Manager](https://github.com/LS3213/Mayday-Mod-Manager) by **lansi**. Install the Manager first, then add the `.maydaymod` via **MOD Management → Add MOD**. Copying the package into the game folder alone will not load it.
 
-A host-management mod for **Mayday Airways**, built for **Mayday Mod Manager 1.2.6 / MelonLoader 0.7.3**. Only the player hosting the room needs the mod. Clients joining someone else's room do not need it and cannot open the management panel.
+A host-management mod for **Mayday Airways**, built for **Mayday Mod Manager 1.2.6 / MelonLoader 0.7.3**. The host needs it for full room management. Members joining someone else's room may also install it to open the local panels (Overview, Settings) for local camera/HUD/ping, language, shortcuts and member broadcast; host-only actions remain unavailable.
 
 > Unofficial mod. Not affiliated with the game's developer or publisher. Read the Limitations section and comply with the game's terms and the licenses of MelonLoader, Harmony, and related projects.
 
@@ -33,8 +33,10 @@ Screenshots use the **English** UI; the Chinese UI is shown in [简体中文](RE
 - **Room**: live room name, capacity 1–250, allow joining, Private/FriendsOnly/Public visibility.
 - **Items**: item grid, search by name/ID/category, spawn by ID, delivery settings (target player/quantity/backpack or ground), favourites and a favourites page.
 - **Settings**: 11 panel languages, shortcut rebinding, and update checks against GitHub Releases.
+- **Camera and HUD**: third-person view, free camera, HUD hiding, and player-control toggles; while seated in the aircraft cockpit or an airport ground vehicle, the camera follows the matching object.
 - **Update check**: the host checks once when the Settings tab is first opened inside a room; afterwards only on demand. When a newer release exists the button turns red and opens that Release page in the default browser; nothing is downloaded or installed automatically.
 - **Lobby defaults**: save the next room's name, capacity, join permission, and visibility.
+- **Member mode**: members who install the mod can open Overview / Settings for local camera/HUD/ping, language and shortcut features. Member broadcast (F9) uses the host relay when the host runs 0.5.167+; with a vanilla/older host it automatically falls back to native ping-label text. The text appears as a ping label of up to 40 characters to everyone in the room, including the vanilla host and clients without the mod. Players / Room / Items and host-only actions stay disabled.
 - The blacklist persists; management actions are logged.
 - Flight saves are not integrated yet; a future version may integrate lansi's Mayday Save.
 
@@ -44,18 +46,18 @@ Screenshots use the **English** UI; the Chinese UI is shown in [简体中文](RE
 - Mayday Mod Manager 1.2.6.
 - MelonLoader 0.7.3.
 - .NET 6 SDK (source builds only).
-- Host only; do not install alongside the old BepInEx HostAdmin/Deep Save.
+- Host install unlocks room management; members may install for the local features (host-only actions stay unavailable). Do not install alongside the old BepInEx HostAdmin/Deep Save.
 
 ## Installation
 
-1. Import `Mayday-Host-Control-0.5.69.maydaymod` with the Manager, enable it, and restart the game.
-2. Create a room from the machine that has the mod installed.
+1. Import `Mayday-Host-Control-0.6.0.maydaymod` with the Manager, enable it, and restart the game.
+2. Create a room from the machine that has the mod installed. Members also need the mod installed to open the local pages.
 3. Open the panel:
    - In a room: use the key icon "Better Host Management" next to "Invite friends" in the pause/captain menu.
    - Main lobby: use "Better Host Management" in the top-right; it opens "Next room defaults" by default.
    - Default shortcut: `F8`; rebind it on the Settings tab.
    - `Esc` closes the panel. When a room text field is focused, the first `Esc` ends editing and the second closes the panel.
-4. Clients joining someone else's room cannot open the panel.
+4. Members joining someone else's room: with the mod installed the panel opens with Overview / Settings; Players / Room / Items and host-only actions are unavailable. Member broadcast (F9) uses the host relay when the host runs 0.5.167+; with a vanilla/older host it falls back to native ping-label text, which needs no host mod. Ping-label text is limited to 40 characters, lasts about 7 seconds, shows at most 8 markers and is not a chat log.
 
 ## Panel
 
@@ -110,7 +112,7 @@ Screenshots use the **English** UI; the Chinese UI is shown in [简体中文](RE
 - **Automatic check**: the host checks once the first time the Settings tab is opened inside a room on this machine (once per game session); later visits do not auto-check.
 - **Manual check**: click the button at any time. It is disabled while a check is running so requests cannot pile up.
 - When a newer release exists the button turns red; clicking it opens the GitHub Release page in the default browser. The mod never downloads, replaces files, or installs silently — Mod Manager still owns updates.
-- Version source: `tag_name` from `GET https://api.github.com/repos/ChEnLeo-7/Mayday-Host-Control/releases/latest`, compared as `x.y.z` against the local version. Release tags use `v<version>` (for example `v0.5.69`).
+- Version source: `tag_name` from `GET https://api.github.com/repos/ChEnLeo-7/Mayday-Host-Control/releases/latest`, compared as `x.y.z` against the local version. Release tags use `v<version>` (for example `v0.6.0`).
 - Requests time out after 6 seconds; offline, rate-limited, or not-yet-published cases are reported in the row only and never block the rest of the panel.
 
 ### Flight saves (not included yet)
@@ -139,7 +141,7 @@ You need the .NET 6 SDK and a game directory where MelonLoader has already gener
 
 - `build.ps1` builds `src\bin\Release\net6.0\Mayday.HostControl.dll`; add `-Deploy` to copy it to the game's `Mods\MaydayPkg.mayday-host-control`.
 - `verify.ps1` builds and validates the keys and placeholders for all 11 languages.
-- `package.ps1` reads the version from `manifest.json` and produces `dist\Mayday-Host-Control-<version>.maydaymod` (currently `0.5.69`), then prints its SHA256.
+- `package.ps1` reads the version from `manifest.json` and produces `dist\Mayday-Host-Control-<version>.maydaymod` (currently `0.6.0`), then prints its SHA256.
 
 ## Repository layout
 
@@ -158,10 +160,12 @@ You need the .NET 6 SDK and a game directory where MelonLoader has already gener
 
 ## Changelog
 
-### 0.5.69
+### 0.6.0
 
-- Fixed the outline that appeared around the update button after a click by removing its focus ring.
-- Screenshots are now split by language: the Chinese README uses Chinese UI shots, the English one uses English UI shots, and both now include the Items tab.
+- Added a complete third-person and free-camera experience with separate follow views for the aircraft cockpit, airport ground vehicles, and the player.
+- Fixed an intermittent first-person view restoration issue after leaving free camera by restoring the camera orientation and the view state captured on entry.
+- Expanded the host-control panel, player/room/item management, member-local features, and ping broadcast support while keeping update checks and localization consistent.
+- Unified the source, build verification, and distributable package at version 0.6.0.
 
 ### 0.5.68
 
@@ -188,7 +192,7 @@ You need the .NET 6 SDK and a game directory where MelonLoader has already gener
 
 - Game updates may break native UI or reflection calls.
 - The panel releases the mouse but cannot guarantee that all flight input is blocked; pause the game or leave the seat before using it.
-- Host only; clients joining another room have no management entry point.
+- The host can open every page; members who install the mod can open Overview / Settings (local features only), while Players / Room / Items and host-only actions remain unavailable. With a vanilla host, member text is limited to native ping labels, not a full-screen chat log.
 - Flight saves are not available in this version; use lansi's Mayday Save if needed.
 
 ## License

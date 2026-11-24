@@ -33,16 +33,23 @@ namespace MaydayHostControl
         private static bool GuiEscapeDown;
         private static bool GuiShortcutCapture;
         private static bool GuiShortcutCaptureEscapeDown;
+        private static int GuiShortcutCaptureTarget;
+        private static UIToggle FreeLookInvertToggle;
+        private static int FreeLookInvertRefreshFrame = -1;
+        private static UIToggle CameraFlyControlsToggle;
+        private static int CameraFlyControlsRefreshFrame = -1;
+        private static UIToggle ForceAutopilotToggle;
+        private static int ForceAutopilotRefreshFrame = -1;
         private static int PanelShortcutVirtualKey = 0x77;
         private static string PanelShortcutDisplay = "F8";
         private static int SuppressBackThroughFrame = -1;
-        private static CursorLockMode PreviousCursorLock;
-        private static bool PreviousCursorVisible;
-        private static bool PreviousLookCaptured;
+        private static bool CursorReconcilePending;
         private static RectTransform GuiRoot;
         private static RectTransform GuiCardRoot;
+        private static TMP_Text GuiSubtitleLabel;
         private static CanvasGroup GuiCanvasGroup;
         private static bool GuiClosing;
+        private static int GuiClosingFrame = -1;
         private static bool GuiLanguageRefreshPending;
 
         // ---- Update check (GitHub Releases) ---------------------------------
@@ -73,7 +80,18 @@ namespace MaydayHostControl
 
         private static bool CanConfigureNextRoom => UIRoot.Instance != null &&
             UIRoot.Instance.CurrentMode == UIRoot.Mode.Menu && !NetworkServer.active && !NetworkClient.active;
-        private static bool CanOpenHostPanel => NetworkServer.activeHost || CanConfigureNextRoom;
+        private static bool IsSoloGame => UIRoot.Instance != null && UIRoot.Instance.CurrentMode == UIRoot.Mode.Game &&
+            !NetworkServer.active && !NetworkClient.active;
+        private static bool CanUseHostPages => NetworkServer.activeHost || CanConfigureNextRoom || IsSoloGame;
+        private static bool IsMemberSession => !CanUseHostPages;
+        private static bool CanOpenPanel => CanUseHostPages ||
+            (NetworkClient.active && UIRoot.Instance != null && UIRoot.Instance.CurrentMode == UIRoot.Mode.Game);
+        private static bool IsTabAvailable(int tab)
+        {
+            if (CanConfigureNextRoom) return tab == 2 || tab == SettingsTabIndex;
+            if (CanUseHostPages) return true;
+            return tab == 0 || tab == SettingsTabIndex;
+        }
         private static bool CurrentJoinAllowed => PanelOpenedForDefaults ? (DefaultRoomJoinable?.Value ?? true) : ManualJoinAllowed;
         private static Il2CppMayday.UI.PauseScreen SourcePauseScreen;
         private static UIScreen UnderlyingTopScreen;
@@ -84,7 +102,6 @@ namespace MaydayHostControl
         private static string RoomVisibilityPending;
         private static bool RoomJoinablePending;
         private static UIButton SaveRoomButton;
-        private static UIButton SaveRoomApplyButton;
         private static TMP_InputField RoomNameInputField;
         private static TMP_InputField CapacityInputField;
         private static TMP_InputField MoneyInputField;
@@ -140,6 +157,26 @@ namespace MaydayHostControl
 
             [DllImport("user32.dll")]
             internal static extern short GetAsyncKeyState(int virtualKey);
+
+            [DllImport("user32.dll")]
+            private static extern IntPtr GetForegroundWindow();
+
+            [DllImport("user32.dll")]
+            private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+            internal static bool IsGameWindowForeground()
+            {
+                try
+                {
+                    var handle = Process.GetCurrentProcess().MainWindowHandle;
+                    var foreground = GetForegroundWindow();
+                    if (foreground == IntPtr.Zero) return false;
+                    if (handle != IntPtr.Zero && foreground == handle) return true;
+                    GetWindowThreadProcessId(foreground, out var processId);
+                    return processId == (uint)Process.GetCurrentProcess().Id;
+                }
+                catch { return false; }
+            }
 
             [DllImport("user32.dll", SetLastError = true)]
             [return: MarshalAs(UnmanagedType.Bool)]
@@ -198,9 +235,18 @@ namespace MaydayHostControl
             return 0x77;
         }
 
-        private static string GetVirtualKeyDisplayName(int virtualKey)
+        internal static string GetVirtualKeyDisplayName(int virtualKey)
         {
             if (virtualKey == 0xC0) return "`";
+            if (virtualKey == 0x10) return "Shift";
+            if (virtualKey == 0x11) return "Ctrl";
+            if (virtualKey == 0x12) return "Alt";
+            if (virtualKey == 0xA0) return "LShift";
+            if (virtualKey == 0xA1) return "RShift";
+            if (virtualKey == 0xA2) return "LCtrl";
+            if (virtualKey == 0xA3) return "RCtrl";
+            if (virtualKey == 0xA4) return "LAlt";
+            if (virtualKey == 0xA5) return "RAlt";
             if (virtualKey >= 0x30 && virtualKey <= 0x39 || virtualKey >= 0x41 && virtualKey <= 0x5A)
                 return ((char)virtualKey).ToString();
             if (virtualKey >= 0x70 && virtualKey <= 0x7B) return "F" + (virtualKey - 0x6F);
@@ -253,21 +299,28 @@ namespace MaydayHostControl
                    virtualKey == 0x08 || virtualKey == 0x09 || virtualKey == 0x0D ||
                    virtualKey == 0x13 || virtualKey == 0x14 || virtualKey == 0x1B ||
                    virtualKey == 0x20 || (virtualKey >= 0x21 && virtualKey <= 0x28) ||
-                   virtualKey == 0x2D || virtualKey == 0x2E;
+                   virtualKey == 0x2D || virtualKey == 0x2E || IsModifierKey(virtualKey);
         }
 
-        private static void BeginShortcutCapture()
+        private static void BeginShortcutCapture(int target = 0)
         {
+            GuiShortcutCaptureTarget = target;
             GuiShortcutCapture = true;
             GuiShortcutCaptureEscapeDown = false;
             GuiStatus = Loc.T("Press a key to bind; Esc cancels");
             RebuildContent();
         }
 
-        private static void CancelShortcutCapture()
+        private static void ClearShortcutCaptureState()
         {
+            GuiShortcutCaptureTarget = 0;
             GuiShortcutCapture = false;
             GuiShortcutCaptureEscapeDown = false;
+        }
+
+        private static void CancelShortcutCapture()
+        {
+            ClearShortcutCaptureState();
             GuiStatus = Loc.T("Shortcut change cancelled");
             RebuildContent();
         }
@@ -278,6 +331,7 @@ namespace MaydayHostControl
             PanelShortcutDisplay = GetVirtualKeyDisplayName(virtualKey);
             OpenPanelKey.Value = virtualKey.ToString();
             Settings.Save();
+            GuiShortcutCaptureTarget = 0;
             GuiShortcutCapture = false;
             GuiShortcutCaptureEscapeDown = false;
             GuiShortcutDown = true;
@@ -296,7 +350,41 @@ namespace MaydayHostControl
             return (GuiVisible || GuiShortcutCapture) && IsMouseAxis(axisName);
         }
 
-        internal static bool ShouldBlockGameInput => GuiVisible || GuiShortcutCapture;
+        internal static bool ShouldBlockGameInput => GuiVisible || GuiShortcutCapture || BroadcastChatOpen;
+
+        // 单一鼠标状态入口：关闭面板/聊天、焦点恢复、暂停/界面收起时都按“当前状态”重算，
+        // 不再回放打开前的快照。
+        internal static void ReconcileCursorState()
+        {
+            if (!Application.isFocused)
+            {
+                CursorReconcilePending = true;
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.visible = true;
+                return;
+            }
+            CursorReconcilePending = false;
+
+            var root = UIRoot.Instance;
+            var gameMode = root != null && root.CurrentMode == UIRoot.Mode.Game;
+            var uiOpen = !gameMode || root.Covered || root.TopScreen != null ||
+                         (root.Pause != null && root.Pause.IsOpen) ||
+                         (root.Console != null && root.Console.IsOpen) ||
+                         GuiVisible || GuiShortcutCapture || BroadcastChatOpen;
+            if (uiOpen)
+            {
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.visible = true;
+                RestoreGameplayCursorWhenUncovered = gameMode;
+                return;
+            }
+
+            Cursor.lockState = CursorLockMode.Locked;
+            Cursor.visible = false;
+            Il2CppMayday.GameInput.LookCaptured = false;
+            RestoreGameplayCursorWhenUncovered = false;
+            LogEvent("gui-cursor-restored", "destination=game locked=true visible=false lookCaptured=" + Il2CppMayday.GameInput.LookCaptured + " inputBlocked=" + Il2CppMayday.GameInput.Blocked);
+        }
 
         internal static void RestoreCursorAfterReturningToGame()
         {
@@ -305,18 +393,15 @@ namespace MaydayHostControl
             if (root == null || root.CurrentMode != UIRoot.Mode.Game)
             {
                 RestoreGameplayCursorWhenUncovered = false;
+                ReconcileCursorState();
                 return;
             }
             // Let native menus/dialogs finish closing before recapturing gameplay input.
             if (!Application.isFocused || root.Covered || root.TopScreen != null || (root.Pause != null && root.Pause.IsOpen) ||
-                (root.Console != null && root.Console.IsOpen)) return;
+                (root.Console != null && root.Console.IsOpen) || BroadcastChatOpen) return;
             // In this game LookCaptured means another system owns look input:
             // GameInput.Look returns zero while it is true. Release that claim when resuming gameplay.
-            Il2CppMayday.GameInput.LookCaptured = false;
-            Cursor.lockState = CursorLockMode.Locked;
-            Cursor.visible = false;
-            RestoreGameplayCursorWhenUncovered = false;
-            LogEvent("gui-cursor-restored", "destination=game locked=true visible=false lookCaptured=" + Il2CppMayday.GameInput.LookCaptured + " inputBlocked=" + Il2CppMayday.GameInput.Blocked);
+            ReconcileCursorState();
         }
 
         private static void KeepCursorAvailableForPanel()
@@ -328,7 +413,26 @@ namespace MaydayHostControl
 
         public override void OnUpdate()
         {
+            if (GuiClosing && GuiClosingFrame >= 0 && Time.frameCount > GuiClosingFrame + 30)
+            {
+                // Tween callbacks can be lost when the screen layer is destroyed; never let this gate stick.
+                GuiClosing = false;
+                GuiClosingFrame = -1;
+                try { if (GuiRoot != null) GuiRoot.gameObject.SetActive(false); } catch { }
+            }
             if (GuiLanguageRefreshPending) RefreshLocalizedShell();
+            TickWorldTimeFlow();
+            TickWorldTimeDisplay();
+            TickBroadcastChat();
+            TickMemberRelayAdvertisement();
+            TickThirdPersonToggle();
+            TickCameraFlyToggle();
+            TickCameraFlyControlsToggle();
+            TickCameraFlyPing();
+            TickForceAutopilot();
+            TickForceAutopilotKey();
+            TickHideHud();
+            RefreshEventButtons();
             // Apply the result of the background update check on the main thread.
             if (UpdateRefreshPending)
             {
@@ -342,14 +446,16 @@ namespace MaydayHostControl
                 KeepCursorAvailableForPanel();
                 RefreshAdaptiveLayout();
                 RefreshRoomJoinableToggleVisual();
+                RefreshWorldDispatchToggleVisual();
                 UpdatePlayerCardUi();
                 if (GuiTab == 0 && Time.unscaledTime >= NextOverviewRefreshTime) RefreshOverviewMetrics();
                 RefreshFocusedRoomInputs();
                 RefreshItemUi();
                 RefreshPanelHoverStyles();
+                RefreshFreeLookInvertToggleVisual();
                 HandleBlankPanelClick();
                 var uiRoot = UIRoot.Instance;
-                if (!CanOpenHostPanel || PanelOpenedForDefaults != CanConfigureNextRoom || uiRoot == null || uiRoot.ScreenLayer == null || GuiRoot == null || GuiScreenLayer != uiRoot.ScreenLayer)
+                if (!CanOpenPanel || PanelOpenedForDefaults != CanConfigureNextRoom || uiRoot == null || uiRoot.ScreenLayer == null || GuiRoot == null || GuiScreenLayer != uiRoot.ScreenLayer)
                 {
                     LogEvent("gui-context-changed", "closing=true activeHost=" + NetworkServer.activeHost);
                     SetGuiVisible(false);
@@ -357,8 +463,17 @@ namespace MaydayHostControl
             }
 
 
+            if (GuiShortcutCapture && !GuiVisible) ClearShortcutCaptureState();
             if (GuiShortcutCapture)
             {
+                if (!NativeInput.IsGameWindowForeground())
+                {
+                    // Do not bind or cancel from keys pressed in another window.
+                    GuiShortcutCaptureEscapeDown = true;
+                    GuiShortcutDown = true;
+                    GuiEscapeDown = true;
+                    return;
+                }
                 var escapeDown = (NativeInput.GetAsyncKeyState(0x1B) & 0x8000) != 0;
                 if (escapeDown && !GuiShortcutCaptureEscapeDown) CancelShortcutCapture();
                 GuiShortcutCaptureEscapeDown = escapeDown;
@@ -366,9 +481,9 @@ namespace MaydayHostControl
                 {
                     for (var key = 1; key < 256; key++)
                     {
-                        if (!IsBindableVirtualKey(key) || IsModifierKey(key) || key == 0x1B) continue;
+                        if (!IsBindableVirtualKey(key) || key == 0x1B) continue;
                         if ((NativeInput.GetAsyncKeyState(key) & 0x8000) == 0) continue;
-                        SetPanelShortcut(key);
+                        if (GuiShortcutCaptureTarget == 1) SetBroadcastShortcut(key); else if (GuiShortcutCaptureTarget == 2) SetThirdPersonShortcut(key); else if (GuiShortcutCaptureTarget == 3) SetThirdPersonFreeLookShortcut(key); else if (GuiShortcutCaptureTarget == 4) SetCameraFlyShortcut(key); else if (GuiShortcutCaptureTarget == 5) SetCameraFlyControlsShortcut(key); else if (GuiShortcutCaptureTarget == 6) SetForceAutopilotShortcut(key); else if (GuiShortcutCaptureTarget == 7) SetHideHudShortcut(key); else SetPanelShortcut(key);
                         break;
                     }
                 }
@@ -377,11 +492,18 @@ namespace MaydayHostControl
                 return;
             }
 
+            if (!NativeInput.IsGameWindowForeground())
+            {
+                GuiShortcutDown = true;
+                GuiEscapeDown = true;
+                return;
+            }
+
             var shortcutDown = (NativeInput.GetAsyncKeyState(GetPanelVirtualKey()) & 0x8000) != 0;
-            if (shortcutDown && !GuiShortcutDown)
+            if (shortcutDown && !GuiShortcutDown && !BroadcastChatOpen)
             {
                 if (GuiVisible) SetGuiVisible(false);
-                else if (CanOpenHostPanel) SetGuiVisible(true);
+                else if (CanOpenPanel) SetGuiVisible(true);
                 else LogEvent("gui-open-skipped", "reason=not-active-host key=" + PanelShortcutDisplay);
             }
             GuiShortcutDown = shortcutDown;
@@ -396,14 +518,18 @@ namespace MaydayHostControl
         private static void RefreshPanelHoverStyles()
         {
             if (GuiCardRoot == null) return;
+            // Room and Settings use the game's native hover outline; other pages keep the previous look.
+            var useNativeOutline = GuiTab == 2 || GuiTab == SettingsTabIndex;
             var buttons = GuiCardRoot.GetComponentsInChildren<UIButton>(true);
             for (var i = 0; i < buttons.Length; i++)
             {
                 var button = buttons[i];
                 if (button == null) continue;
                 // Hover darkens the current base color without replacing the native selected palette.
+                var keyName = button.name;                 if (keyName == "ShortcutCapture" || keyName == "BroadcastShortcutCapture" || keyName == "ThirdPersonShortcutButton") continue;
                 var background = button.selected ? button.bgSelected : button.bgNormal;
                 button.bgHover = Color.Lerp(background, UITheme.Ink, 0.07f);
+                if (useNativeOutline) continue;
                 if (button.Ring != null) button.Ring.enabled = false;
                 foreach (var outline in button.GetComponentsInChildren<Outline>(true))
                     outline.enabled = false;
@@ -421,8 +547,12 @@ namespace MaydayHostControl
         {
             SmoothListScroll.Prune();
             RefreshItemPointerVisuals();
+            TickBroadcastChatLate();
+            TickThirdPersonCameraLate();
+            if (GuiVisible) ReleaseFreeCameraInput();
             if (GuiVisible) RefreshNavigationFocusEffects();
             RestoreCursorAfterReturningToGame();
+            if (CursorReconcilePending && Application.isFocused) ReconcileCursorState();
         }
 
         private static void RefreshNavigationFocusEffects()
@@ -445,6 +575,8 @@ namespace MaydayHostControl
 
         public override void OnDeinitializeMelon()
         {
+            ClearShortcutCaptureState();
+            if (BroadcastChatOpen) CloseBroadcastChat();
             SetGuiVisible(false);
             Running = false;
             if (GuiRoot != null) UnityEngine.Object.Destroy(GuiRoot.gameObject);
@@ -454,7 +586,8 @@ namespace MaydayHostControl
 
         internal static void InstallPauseMenuButton(Il2CppMayday.UI.PauseScreen screen)
         {
-            if (!NetworkServer.activeHost || screen == null || screen.inviteBtn == null || PauseMenuButton != null) return;
+            if (!CanOpenPanel || UIRoot.Instance == null || UIRoot.Instance.CurrentMode != UIRoot.Mode.Game ||
+                screen == null || screen.inviteBtn == null || PauseMenuButton != null) return;
             try
             {
                 var parent = screen.inviteBtn.transform.parent;
@@ -538,7 +671,8 @@ namespace MaydayHostControl
         private static bool SetGuiVisible(bool visible)
         {
             if (GuiVisible == visible && !GuiClosing) return true;
-            if (visible && !CanOpenHostPanel)
+            if (!visible && GuiClosing) return true;
+            if (visible && !CanOpenPanel)
             {
                 GuiStatus = Loc.T("Only available when hosting a room");
                 LogEvent("gui-open-skipped", "reason=not-active-host");
@@ -552,10 +686,13 @@ namespace MaydayHostControl
                     GuiTab = 2;
                     GuiStatus = string.Empty;
                 }
+                if (!IsTabAvailable(GuiTab)) GuiTab = 0;
                 PendingCapacityText = PlayerLimit?.Value.ToString() ?? "6";
                 RoomVisibilityPending = CurrentVisibility;
                 RoomJoinablePending = CurrentJoinAllowed;
+                DiscardPendingRoomChanges();
                 EnsureNativeScreenCreated();
+                RefreshPanelSubtitle();
                 if (GuiRoot == null)
                 {
                     GuiStatus = Loc.T("Game UI is not initialized");
@@ -563,19 +700,15 @@ namespace MaydayHostControl
                     return false;
                 }
                 LayoutLocalizedTabs(GuiRoot);
-                PreviousCursorLock = Cursor.lockState;
-                PreviousCursorVisible = Cursor.visible;
-                PreviousLookCaptured = Il2CppMayday.GameInput.LookCaptured;
                 OpenedFromPauseMenu = SourcePauseScreen != null;
                 UnderlyingTopScreen = UIRoot.Instance != null ? UIRoot.Instance.TopScreen : null;
-                if (UIRoot.Instance != null && UIRoot.Instance.CurrentMode == UIRoot.Mode.Game &&
-                    (OpenedFromPauseMenu || (UIRoot.Instance.Pause != null && UIRoot.Instance.Pause.IsOpen)))
-                    RestoreGameplayCursorWhenUncovered = true;
+                CloseBroadcastChat();
                 Cursor.lockState = CursorLockMode.None;
                 Cursor.visible = true;
                 GuiRoomNameInput = RoomName?.Value ?? string.Empty;
                 GuiVisible = true;
                 GuiClosing = false;
+                GuiClosingFrame = -1;
                 LogEvent("gui-visibility", "visible=true nativeGameUi=true");
                 GuiRoot.gameObject.SetActive(true);
                 GuiRoot.SetAsLastSibling();
@@ -605,22 +738,23 @@ namespace MaydayHostControl
             }
 
             CloseBlacklistWindow();
+            ClearShortcutCaptureState();
             if (GuiContent != null) SmoothListScroll.Cancel(GuiContent.GetComponentInParent<ScrollRect>());
+            DiscardPendingRoomChanges();
             GuiVisible = false;
             if (GuiCanvasGroup != null)
             {
                 GuiClosing = true;
+                GuiClosingFrame = Time.frameCount;
                 GuiCanvasGroup.interactable = false;
                 GuiCanvasGroup.blocksRaycasts = false;
                 Il2CppMayday.UI.UITween.Kill(GuiCanvasGroup);
                 Il2CppMayday.UI.UITween.Fade(GuiCanvasGroup, 0f, 0.18f, Il2CppMayday.UI.Ease.OutQuad, 0f,
                     NativeAction(() =>
                     {
-                        if (GuiClosing && GuiCanvasGroup != null && GuiRoot != null)
-                        {
-                            GuiRoot.gameObject.SetActive(false);
-                            GuiClosing = false;
-                        }
+                        if (GuiCanvasGroup != null && GuiRoot != null) GuiRoot.gameObject.SetActive(false);
+                        GuiClosing = false;
+                        GuiClosingFrame = -1;
                     }));
             }
             else if (GuiRoot != null) GuiRoot.gameObject.SetActive(false);
@@ -644,9 +778,6 @@ namespace MaydayHostControl
             PauseScreenHidden = false;
             SourcePauseScreen = null;
             UnderlyingTopScreen = null;
-            Il2CppMayday.GameInput.LookCaptured = PreviousLookCaptured;
-            Cursor.lockState = PreviousCursorLock;
-            Cursor.visible = PreviousCursorVisible;
             OpenedFromPauseMenu = false;
             GuiConfirmRecoveryId = null;
             GuiConfirmDeleteId = null;
@@ -655,6 +786,7 @@ namespace MaydayHostControl
             RoomJoinablePending = ManualJoinAllowed;
             GuiRoomNameInput = RoomName?.Value ?? string.Empty;
             UpdateRoomSaveButtons();
+            ReconcileCursorState();
             return true;
         }
 
@@ -662,6 +794,7 @@ namespace MaydayHostControl
         {
             ResetItemUi();
             GuiCardRoot = null;
+            GuiSubtitleLabel = null;
             ItemFavoritesHeaderButton = null;
             ItemPopupRoot = null;
             MainPanelInteraction = null;
@@ -684,7 +817,6 @@ namespace MaydayHostControl
             RoomJoinableToggle = null;
             RoomJoinableVisualRefreshFrame = -1;
             SaveRoomButton = null;
-            SaveRoomApplyButton = null;
             GuiNavButtons = null;
             GuiContent = null;
             GuiPageContent = null;
@@ -710,6 +842,7 @@ namespace MaydayHostControl
             }
             ClearNativeScreenReferences();
             GuiClosing = false;
+            GuiClosingFrame = -1;
             if (PauseMenuButton != null)
             {
                 PauseMenuButton.gameObject.SetActive(false);
@@ -736,6 +869,12 @@ namespace MaydayHostControl
             RebuildContent();
             FocusCurrentTab();
             KeepCursorAvailableForPanel();
+        }
+
+        private static void RefreshPanelSubtitle()
+        {
+            if (GuiSubtitleLabel == null) return;
+            GuiSubtitleLabel.text = IsMemberSession ? string.Empty : Loc.T("Better Host Management · Host-only");
         }
 
         private static void EnsureNativeScreenCreated()
@@ -768,7 +907,10 @@ namespace MaydayHostControl
             var titleText = NativeText(card.Root, "Title", Loc.T("Better Host Management"), UITheme.SizeHeader, UITheme.Navy, TextAlignmentOptions.Left, 32f, 22f, 1116f, 48f, false);
             titleText.GetComponent<TMP_Text>().enableAutoSizing = true;
             titleText.GetComponent<TMP_Text>().fontSizeMin = UITheme.SizeBody;
-            var subtitleText = NativeText(card.Root, "Subtitle", Loc.T("Better Host Management · Host-only"), UITheme.SizeSmall, UITheme.InkSoft, TextAlignmentOptions.Left, 32f, 68f, 1116f, 28f, false);
+            var subtitle = IsMemberSession ? string.Empty : Loc.T("Better Host Management · Host-only");
+            var subtitleText = NativeText(card.Root, "Subtitle", subtitle, UITheme.SizeSmall, UITheme.InkSoft, TextAlignmentOptions.Left, 32f, 68f, 1116f, 28f, false);
+            GuiSubtitleLabel = subtitleText.GetComponent<TMP_Text>();
+            RefreshPanelSubtitle();
             subtitleText.GetComponent<TMP_Text>().enableAutoSizing = true;
             subtitleText.GetComponent<TMP_Text>().fontSizeMin = UITheme.SizeSmall * 0.8f;
 
@@ -783,6 +925,8 @@ namespace MaydayHostControl
                 GuiNavButtons[i] = NativeButton(card.Root, "Tab" + i, Loc.T(GuiTabs[i]), ButtonStyle.Tab,
                     tabsX + i * (tabWidth + tabGap), 132f, tabWidth, 54f, () =>
                 {
+                    if (!IsTabAvailable(tabIndex)) return;
+                    if (GuiTab == 2 && tabIndex != 2) DiscardPendingRoomChanges();
                     if (tabIndex == ItemsTabIndex) ItemFavoritesPage = false;
                     GuiTab = tabIndex;
                     GuiConfirmRecoveryId = null;
@@ -810,8 +954,7 @@ namespace MaydayHostControl
             GuiContentVisibility.alpha = 1f;
             GuiContentVisibility.interactable = true;
             GuiContentVisibility.blocksRaycasts = true;
-            SaveRoomButton = NativeFooterButton(card.Root, "SaveRoomSettings", Loc.T("Save"), ButtonStyle.Secondary, 580f, 142f, () => SavePendingRoomSettings(false));
-            SaveRoomApplyButton = NativeFooterButton(card.Root, "SaveRoomSettingsAndClose", Loc.T("Save and apply"), ButtonStyle.Primary, 726f, 156f, () => SavePendingRoomSettings(true));
+            SaveRoomButton = NativeFooterButton(card.Root, "SaveRoomSettings", Loc.T("Save and apply"), ButtonStyle.Secondary, 580f, 142f, ApplyAllPendingSettings);
             EliminateAllFooterButton = NativeFooterButton(card.Root, "EliminateAll", Loc.T("Eliminate all"), ButtonStyle.Secondary, 32f, 200f,
                 () => RunPanelAction(EliminateAllRemotePlayers));
             SetPlayerActionColors(EliminateAllFooterButton, EliminateYellow, UITheme.Ink);
@@ -872,12 +1015,22 @@ namespace MaydayHostControl
             for (var i = 0; i < GuiNavButtons.Length; i++)
             {
                 if (GuiNavButtons[i] == null) continue;
-                GuiNavButtons[i].SetInteractable(!PanelOpenedForDefaults || i == 2 || i == 4);
+                GuiNavButtons[i].SetInteractable(IsTabAvailable(i));
                 GuiNavButtons[i].SetSelected(i == GuiTab);
                 if (GuiNavButtons[i].Ring != null) GuiNavButtons[i].Ring.enabled = false;
             }
 
-            if (!NetworkServer.activeHost && !(PanelOpenedForDefaults && (GuiTab == 2 || GuiTab == 4)))
+            if (IsMemberSession)
+            {
+                if (GuiTab != 0 && GuiTab != SettingsTabIndex)
+                {
+                    NativeSettingsSection(GuiContent, Loc.T("Host permissions"));
+                    NativeDisplayRow(GuiContent, Loc.T("Status"), Loc.T("Only available when hosting a room"), true);
+                    if (contentWasVisible) FinishAdaptiveLayoutAfterRebuild();
+                    return;
+                }
+            }
+            else if (CanConfigureNextRoom && GuiTab != 2 && GuiTab != SettingsTabIndex)
             {
                 NativeSettingsSection(GuiContent, Loc.T("Host permissions"));
                 NativeDisplayRow(GuiContent, Loc.T("Status"), Loc.T("Create a single-player or Steam room on this computer first."), true);
@@ -954,6 +1107,13 @@ namespace MaydayHostControl
         private static void BuildOverview()
         {
             ResetOverviewReferences();
+            if (IsMemberSession)
+            {
+                NativeSettingsSection(GuiContent, Loc.T("Flight status"));
+                BuildOverviewFlightMetrics();
+                RefreshOverviewMetrics();
+                return;
+            }
             NativeSettingsSection(GuiContent, Loc.T("Room status"));
             var serverMetrics = UIF.Rect("Overview.ServerMetrics", GuiContent);
             UIF.LE(serverMetrics.gameObject, -1f, -1f, 1f, 0f, -1f, 1f);
@@ -999,6 +1159,12 @@ namespace MaydayHostControl
             LayoutRebuilder.MarkLayoutForRebuild(roomGrid);
 
             NativeSettingsSection(GuiContent, Loc.T("Flight status"));
+            BuildOverviewFlightMetrics();
+            RefreshOverviewMetrics();
+        }
+
+        private static void BuildOverviewFlightMetrics()
+        {
             var flightMetrics = UIF.Rect("Overview.FlightMetrics", GuiContent);
             UIF.LE(flightMetrics.gameObject, -1f, -1f, 1f, 0f, -1f, 1f);
             UIF.VLayout(flightMetrics.gameObject, 8f, UIF.Pad(0), TextAnchor.UpperLeft, true, true, true, false);
@@ -1010,8 +1176,6 @@ namespace MaydayHostControl
             OverviewFlightPhaseValue = flightRow.First;
             OverviewFlightLegValue = flightRow.Second;
             OverviewMoneyValue = flightRow.Third;
-
-            RefreshOverviewMetrics();
         }
 
         private static void ResetOverviewReferences()
@@ -1261,11 +1425,55 @@ namespace MaydayHostControl
             }
         }
 
+        private static bool HasPendingMoney
+        {
+            get
+            {
+                var current = Il2CppMayday.GameState.Instance != null ? Il2CppMayday.GameState.Instance.Money : 0;
+                var text = MoneyInputField != null ? MoneyInputField.text : string.Empty;
+                return int.TryParse(text, out var value) && value >= 0 && value != current;
+            }
+        }
+
+        private static void ApplyAllPendingSettings()
+        {
+            var summary = new List<string>();
+            if (HasPendingMoney && int.TryParse(MoneyInputField != null ? MoneyInputField.text : string.Empty, out var money) && money >= 0)
+            {
+                var result = ApplyMoney(money);
+                if (!string.IsNullOrEmpty(result)) summary.Add(result);
+            }
+            if (HasPendingWorldChanges())
+            {
+                var world = ApplyWorldSettings();
+                if (!string.IsNullOrEmpty(world)) summary.Add(world);
+            }
+            if (HasPendingRoomChanges)
+            {
+                SavePendingRoomSettings(false);
+                UpdateRoomSaveButtons();
+                return;
+            }
+            GuiStatus = string.Join(" | ", summary);
+            RebuildContent();
+            UpdateRoomSaveButtons();
+        }
+
+        private static void DiscardPendingRoomChanges()
+        {
+            WorldDiscardPendingChanges();
+            PendingCapacityText = PlayerLimit?.Value.ToString() ?? "6";
+            RoomVisibilityPending = CurrentVisibility;
+            RoomJoinablePending = CurrentJoinAllowed;
+            GuiRoomNameInput = RoomName?.Value ?? string.Empty;
+            UpdateRoomSaveButtons();
+        }
+
         private static void UpdateRoomSaveButtons()
         {
-            var visible = GuiVisible && GuiTab == 2 && HasPendingRoomChanges;
+            var visible = GuiVisible && GuiTab == 2 && (HasPendingRoomChanges || HasPendingMoney || HasPendingWorldChanges());
             if (SaveRoomButton != null) SaveRoomButton.gameObject.SetActive(visible);
-            if (SaveRoomApplyButton != null) SaveRoomApplyButton.gameObject.SetActive(visible);
+            LayoutFooterButtons();
         }
 
         private static void SavePendingRoomSettings(bool closeAfterSave)
@@ -1382,7 +1590,7 @@ namespace MaydayHostControl
             RoomJoinableVisualRefreshFrame = Time.frameCount + 1;
 
             var visibilityControl = NewNativeSettingRow(GuiContent, "Visibility", Loc.T("Room visibility"), null, 64f);
-            UIF.Selector(visibilityControl, "RoomVisibility", new Il2CppStringArray(visibilityNames), visibilityIndex,
+            var visibilitySelector = UIF.Selector(visibilityControl, "RoomVisibility", new Il2CppStringArray(visibilityNames), visibilityIndex,
                 NativeIntAction(index =>
                 {
                     // Compare against the live pending value, not the snapshot taken when this row was built.
@@ -1391,8 +1599,28 @@ namespace MaydayHostControl
                     if (index < 0 || index >= visibilityValues.Length || visibilityValues[index] == pendingVisibility) return;
                     RoomVisibilityPending = visibilityValues[index];
                     UpdateRoomSaveButtons();
-                }), 360f);
+                }), 200f);
+            FitSelectorWidth(visibilitySelector, visibilityNames, 180f, 360f);
 
+
+            if (NetworkServer.activeHost && !PanelOpenedForDefaults)
+            {
+                NativeSettingsSection(GuiContent, Loc.T("Additional settings"));
+                var state = Il2CppMayday.GameState.Instance;
+                var currentMoney = state != null ? state.Money : 0;
+                var moneyControl = NewNativeSettingRow(GuiContent, "Money", Loc.T("Set game money"),
+                    Loc.T("Current money: {0}", currentMoney), 68f);
+                MoneyInputField = UIF.Input(moneyControl, "MoneyInput", currentMoney.ToString(), "0", 10,
+                    NativeStringAction(value =>
+                    {
+                        var digits = new string((value ?? string.Empty).Where(char.IsDigit).Take(10).ToArray());
+                        if (MoneyInputField != null && MoneyInputField.text != digits) MoneyInputField.text = digits;
+                        UpdateRoomSaveButtons();
+                    }), 220f, 48f);
+
+            }
+
+            if (NetworkServer.activeHost && !PanelOpenedForDefaults) BuildWorldControlSections();
         }
 
         private const float NativeContentWidth = 1116f;
@@ -1405,6 +1633,80 @@ namespace MaydayHostControl
             row.name = "OfficialSettingRow." + name;
             control.name = "OfficialControl";
             return control;
+        }
+
+        private static void FitSelectorWidth(UISelector selector, string[] options, float minWidth, float maxWidth, float padding = 96f)
+        {
+            if (selector == null || options == null || options.Length == 0) return;
+            try
+            {
+                var text = selector.ValueLabel != null ? selector.ValueLabel.GetComponent<TMP_Text>() : null;
+                var widest = 0f;
+                for (var i = 0; i < options.Length; i++)
+                {
+                    var option = options[i];
+                    if (string.IsNullOrEmpty(option)) continue;
+                    var width = text != null
+                        ? text.GetPreferredValues(option, float.PositiveInfinity, float.PositiveInfinity).x
+                        : option.Length * 14f;
+                    widest = Mathf.Max(widest, width);
+                }
+                var finalWidth = Mathf.Clamp(widest + padding, minWidth, maxWidth);
+                var rect = selector.GetComponent<RectTransform>();
+                if (rect != null) rect.sizeDelta = new Vector2(finalWidth, rect.sizeDelta.y);
+                var layout = selector.GetComponent<LayoutElement>();
+                if (layout != null)
+                {
+                    layout.minWidth = finalWidth;
+                    layout.preferredWidth = finalWidth;
+                    layout.flexibleWidth = 0f;
+                }
+            }
+            catch { }
+        }
+
+        private static void StyleOfficialKeybindButton(UIButton button)
+        {
+            if (button == null) return;
+            SetPlayerActionColors(button, UITheme.Navy, Color.white);
+            button.bgHover = UITheme.Teal;
+            button.fgHover = Color.white;
+            button.fgSelected = Color.white;
+            button.bgSelected = UITheme.Teal;
+            button.bgPress = UITheme.TealDk;
+            button.bgDisabled = UITheme.Navy;
+            button.fgDisabled = Color.white;
+            var label = button.GetComponentInChildren<TMP_Text>();
+            if (label != null)
+            {
+                label.fontStyle = FontStyles.Bold;
+                label.enableAutoSizing = false;
+                label.fontSize = UITheme.SizeSmall * 0.95f;
+                label.color = Color.white;
+            }
+            if (button.Ring != null) button.Ring.enabled = true;
+        }
+        private static void RefreshFreeLookInvertToggleVisual()
+        {
+            if (CameraFlyControlsToggle != null && CameraFlyControlsRefreshFrame >= 0 && Time.frameCount >= CameraFlyControlsRefreshFrame && GuiVisible)             {                 CameraFlyControlsRefreshFrame = -1;                 try                 {                     CameraFlyControlsToggle.SetValue(CameraFlyPlayerControls != null && CameraFlyPlayerControls.Value, true);                     CameraFlyControlsToggle.Visual();                 }                 catch { }             }
+            if (ForceAutopilotToggle != null && ForceAutopilotRefreshFrame >= 0 && Time.frameCount >= ForceAutopilotRefreshFrame && GuiVisible)
+            {
+                ForceAutopilotRefreshFrame = -1;
+                try
+                {
+                    ForceAutopilotToggle.SetValue(ForceAutopilot != null && ForceAutopilot.Value, true);
+                    ForceAutopilotToggle.Visual();
+                }
+                catch { }
+            }
+            if (FreeLookInvertToggle == null || FreeLookInvertRefreshFrame < 0 || Time.frameCount < FreeLookInvertRefreshFrame || !GuiVisible) return;
+            FreeLookInvertRefreshFrame = -1;
+            try
+            {
+                FreeLookInvertToggle.SetValue(ThirdPersonFreeLookInvertY != null && ThirdPersonFreeLookInvertY.Value, true);
+                FreeLookInvertToggle.Visual();
+            }
+            catch { }
         }
 
         private static void NativeSettingsSection(Transform parent, string title)
@@ -1521,33 +1823,160 @@ namespace MaydayHostControl
             NativeButton(shortcutControl, "ShortcutCapture", GuiShortcutCapture ? Loc.T("Waiting for key…") : PanelShortcutDisplay,
                 GuiShortcutCapture ? ButtonStyle.Primary : ButtonStyle.Secondary, 220f, 42f,
                 () => { if (!GuiShortcutCapture) BeginShortcutCapture(); });
+            StyleOfficialKeybindButton(shortcutControl.GetComponentInChildren<UIButton>());
 
-            if (NetworkServer.activeHost)
+            if (NetworkServer.activeHost || NetworkClient.active)
             {
-                NativeSettingsSection(GuiContent, Loc.T("Additional settings"));
-                var state = Il2CppMayday.GameState.Instance;
-                var currentMoney = state != null ? state.Money : 0;
-                var moneyControl = NewNativeSettingRow(GuiContent, "Money", Loc.T("Set game money"),
-                    Loc.T("Current money: {0}", currentMoney), 68f);
-                MoneyInputField = UIF.Input(moneyControl, "MoneyInput", currentMoney.ToString(), "0", 10,
-                    NativeStringAction(value =>
-                    {
-                        var digits = new string((value ?? string.Empty).Where(char.IsDigit).Take(10).ToArray());
-                        if (MoneyInputField != null && MoneyInputField.text != digits) MoneyInputField.text = digits;
-                    }), 220f, 48f);
-                NativeButton(moneyControl, "ApplyMoney", Loc.T("Apply"), ButtonStyle.Primary, 140f, 42f, () =>
-                {
-                    var text = MoneyInputField != null ? MoneyInputField.text : string.Empty;
-                    if (!int.TryParse(text, out var target) || target < 0)
-                    {
-                        GuiStatus = Loc.T("Money must be between 0 and {0}", int.MaxValue);
-                        RebuildContent();
-                        return;
-                    }
-                    RunPanelAction(() => ApplyMoney(target));
-                });
+                var broadcastShortcutControl = NewNativeSettingRow(GuiContent, "BroadcastShortcut", Loc.T("WC.BroadcastShortcut"),
+                    GuiShortcutCapture && GuiShortcutCaptureTarget == 1 ? Loc.T("Press any key to bind; Esc cancels") : Loc.T("Click the button, then press a key to bind"), 64f);
+                NativeButton(broadcastShortcutControl, "BroadcastShortcutCapture",
+                    GuiShortcutCapture && GuiShortcutCaptureTarget == 1 ? Loc.T("Waiting for key…") : BroadcastShortcutDisplay,
+                    GuiShortcutCapture && GuiShortcutCaptureTarget == 1 ? ButtonStyle.Primary : ButtonStyle.Secondary, 220f, 42f,
+                    () => { if (!GuiShortcutCapture) BeginShortcutCapture(1); });
+                StyleOfficialKeybindButton(broadcastShortcutControl.GetComponentInChildren<UIButton>());
 
+                var newlineControl = NewNativeSettingRow(GuiContent, "BroadcastNewline", Loc.T("WC.NewlineModifier"), null, 64f);
+                var newlineNames = new[] { "Shift+Enter", "Ctrl+Enter" };
+                var newlineIndex = string.Equals(BroadcastNewlineKey?.Value, "Ctrl", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+                var newlineSelector = UIF.Selector(newlineControl, "BroadcastNewlineSelector", new Il2CppStringArray(newlineNames), newlineIndex,
+                    NativeIntAction(index =>
+                    {
+                        if (BroadcastNewlineKey != null)
+                        {
+                            BroadcastNewlineKey.Value = index == 1 ? "Ctrl" : "Shift";
+                            Settings.Save();
+                        }
+                    }), 320f);
+                if (newlineSelector != null && newlineSelector.ValueLabel != null)
+                {
+                    var labelRect = newlineSelector.ValueLabel.Rect;
+                    if (labelRect != null)
+                    {
+                        labelRect.anchorMin = new Vector2(0f, 0f);
+                        labelRect.anchorMax = new Vector2(1f, 1f);
+                        labelRect.offsetMin = new Vector2(52f, 0f);
+                        labelRect.offsetMax = new Vector2(-52f, 0f);
+                    }
+                }
+                var newlineLabel = newlineSelector != null && newlineSelector.ValueLabel != null ? newlineSelector.ValueLabel.GetComponent<TMP_Text>() : null;
+                if (newlineLabel != null)
+                {
+                    newlineLabel.fontStyle = FontStyles.Bold;
+                    newlineLabel.enableAutoSizing = false;
+                    newlineLabel.fontSize = UITheme.SizeSmall * 0.95f;
+                }
+                FitSelectorWidth(newlineSelector, newlineNames, 260f, 420f, 170f);
             }
+
+            var thirdPersonControl = NewNativeSettingRow(GuiContent, "ThirdPersonShortcut", Loc.T("WC.ThirdPersonShortcut"),
+                GuiShortcutCapture && GuiShortcutCaptureTarget == 2 ? Loc.T("Press any key to bind; Esc cancels") : Loc.T("Click the button, then press a key to bind"), 64f);
+            NativeButton(thirdPersonControl, "ThirdPersonShortcutButton",
+                GuiShortcutCapture && GuiShortcutCaptureTarget == 2 ? Loc.T("Waiting for key…") : ThirdPersonShortcutName,
+                GuiShortcutCapture && GuiShortcutCaptureTarget == 2 ? ButtonStyle.Primary : ButtonStyle.Secondary, 220f, 42f,
+                () => { if (!GuiShortcutCapture) BeginShortcutCapture(2); });
+            StyleOfficialKeybindButton(thirdPersonControl.GetComponentInChildren<UIButton>());
+
+            var freeLookControl = NewNativeSettingRow(GuiContent, "ThirdPersonFreeLookShortcut", Loc.T("WC.FreeLookShortcut"),
+                GuiShortcutCapture && GuiShortcutCaptureTarget == 3 ? Loc.T("Press any key to bind; Esc cancels") : Loc.T("Click the button, then press a key to bind"), 64f);
+            NativeButton(freeLookControl, "ThirdPersonFreeLookShortcutButton",
+                GuiShortcutCapture && GuiShortcutCaptureTarget == 3 ? Loc.T("Waiting for key…") : ThirdPersonFreeLookShortcutName,
+                GuiShortcutCapture && GuiShortcutCaptureTarget == 3 ? ButtonStyle.Primary : ButtonStyle.Secondary, 220f, 42f,
+                () => { if (!GuiShortcutCapture) BeginShortcutCapture(3); });
+            StyleOfficialKeybindButton(freeLookControl.GetComponentInChildren<UIButton>());
+
+            var currentSensitivity = ThirdPersonFreeLookSensitivity != null ? ThirdPersonFreeLookSensitivity.Value : 2.2f;
+            var sensitivityControl = NewNativeSettingRow(GuiContent, "ThirdPersonFreeLookSensitivity", Loc.T("WC.FreeLookSensitivity"), null, 64f);
+            var sensitivityFormat = DelegateSupport.ConvertDelegate<Il2CppSystem.Func<float, string>>(new Func<float, string>(value => "x" + value.ToString("0.00")));
+            var sensitivityChanged = DelegateSupport.ConvertDelegate<Il2CppSystem.Action<float>>(new Action<float>(value =>
+            {
+                if (ThirdPersonFreeLookSensitivity != null)
+                {
+                    ThirdPersonFreeLookSensitivity.Value = value;
+                    Settings.Save();
+                }
+            }));
+            UIF.Slider(sensitivityControl, "ThirdPersonFreeLookSensitivitySlider", 0.2f, 5.0f, currentSensitivity, false, sensitivityFormat, sensitivityChanged, 368f);
+
+            var invertControl = NewNativeSettingRow(GuiContent, "ThirdPersonFreeLookInvertY", Loc.T("WC.InvertFreeLookY"), null, 64f);
+            var invertToggle = UIF.Toggle(invertControl, "ThirdPersonFreeLookInvertYToggle", ThirdPersonFreeLookInvertY != null && ThirdPersonFreeLookInvertY.Value,
+                NativeBoolAction(value =>
+                {
+                    if (ThirdPersonFreeLookInvertY != null)
+                    {
+                        ThirdPersonFreeLookInvertY.Value = value;
+                        Settings.Save();
+                    }
+                }));
+            invertToggle.SetValue(ThirdPersonFreeLookInvertY != null && ThirdPersonFreeLookInvertY.Value, true);
+            invertToggle.Visual();
+            FreeLookInvertToggle = invertToggle;
+            FreeLookInvertRefreshFrame = Time.frameCount + 1;
+
+            var cameraControlsControl = NewNativeSettingRow(GuiContent, "CameraFlyPlayerControls", Loc.T("WC.CameraFlyPlayerControls"), null, 64f);
+            var cameraControlsToggle = UIF.Toggle(cameraControlsControl, "CameraFlyPlayerControlsToggle", CameraFlyPlayerControls != null && CameraFlyPlayerControls.Value,
+                NativeBoolAction(value =>
+                {
+                    if (CameraFlyPlayerControls != null)
+                    {
+                        CameraFlyPlayerControls.Value = value;
+                        Settings.Save();
+                    }
+                    if (CameraFlyActive && CameraFlyRig != null && CameraFlyRig.Motor != null)
+                        CameraFlyRig.Motor.enabled = value && CameraFlyPreviousMotorEnabled;
+                }));
+            cameraControlsToggle.SetValue(CameraFlyPlayerControls != null && CameraFlyPlayerControls.Value, true);
+            cameraControlsToggle.Visual();
+            CameraFlyControlsToggle = cameraControlsToggle;
+            CameraFlyControlsRefreshFrame = Time.frameCount + 1;
+
+            var cameraControlsKeyControl = NewNativeSettingRow(GuiContent, "CameraFlyControlsKey", Loc.T("WC.CameraFlyControlsKey"),
+                GuiShortcutCapture && GuiShortcutCaptureTarget == 5 ? Loc.T("Press any key to bind; Esc cancels") : Loc.T("Click the button, then press a key to bind"), 64f);
+            NativeButton(cameraControlsKeyControl, "CameraFlyControlsKeyButton",
+                GuiShortcutCapture && GuiShortcutCaptureTarget == 5 ? Loc.T("Waiting for key…") : CameraFlyControlsShortcutName,
+                GuiShortcutCapture && GuiShortcutCaptureTarget == 5 ? ButtonStyle.Primary : ButtonStyle.Secondary, 220f, 42f,
+                () => { if (!GuiShortcutCapture) BeginShortcutCapture(5); });
+            StyleOfficialKeybindButton(cameraControlsKeyControl.GetComponentInChildren<UIButton>());
+
+            if (!IsMemberSession)
+            {
+                var forceApKeyControl = NewNativeSettingRow(GuiContent, "ForceAutopilotKey", Loc.T("WC.ForceAutopilotKey"),
+                    GuiShortcutCapture && GuiShortcutCaptureTarget == 6 ? Loc.T("Press any key to bind; Esc cancels") : Loc.T("Click the button, then press a key to bind"), 64f);
+                NativeButton(forceApKeyControl, "ForceAutopilotKeyButton",
+                    GuiShortcutCapture && GuiShortcutCaptureTarget == 6 ? Loc.T("Waiting for key…") : ForceAutopilotShortcutName,
+                    GuiShortcutCapture && GuiShortcutCaptureTarget == 6 ? ButtonStyle.Primary : ButtonStyle.Secondary, 220f, 42f,
+                    () => { if (!GuiShortcutCapture) BeginShortcutCapture(6); });
+                StyleOfficialKeybindButton(forceApKeyControl.GetComponentInChildren<UIButton>());
+            }
+
+            var hideHudKeyControl = NewNativeSettingRow(GuiContent, "HideHudKey", Loc.T("WC.HideHudKey"),
+                GuiShortcutCapture && GuiShortcutCaptureTarget == 7 ? Loc.T("Press any key to bind; Esc cancels") : Loc.T("Click the button, then press a key to bind"), 64f);
+            NativeButton(hideHudKeyControl, "HideHudKeyButton",
+                GuiShortcutCapture && GuiShortcutCaptureTarget == 7 ? Loc.T("Waiting for key…") : HideHudShortcutName,
+                GuiShortcutCapture && GuiShortcutCaptureTarget == 7 ? ButtonStyle.Primary : ButtonStyle.Secondary, 220f, 42f,
+                () => { if (!GuiShortcutCapture) BeginShortcutCapture(7); });
+            StyleOfficialKeybindButton(hideHudKeyControl.GetComponentInChildren<UIButton>());
+
+            var cameraFlyControl = NewNativeSettingRow(GuiContent, "CameraFlyShortcut", Loc.T("WC.CameraFlyShortcut"),
+                GuiShortcutCapture && GuiShortcutCaptureTarget == 4 ? Loc.T("Press any key to bind; Esc cancels") : Loc.T("Click the button, then press a key to bind"), 64f);
+            NativeButton(cameraFlyControl, "CameraFlyShortcutButton",
+                GuiShortcutCapture && GuiShortcutCaptureTarget == 4 ? Loc.T("Waiting for key…") : CameraFlyShortcutName,
+                GuiShortcutCapture && GuiShortcutCaptureTarget == 4 ? ButtonStyle.Primary : ButtonStyle.Secondary, 220f, 42f,
+                () => { if (!GuiShortcutCapture) BeginShortcutCapture(4); });
+            StyleOfficialKeybindButton(cameraFlyControl.GetComponentInChildren<UIButton>());
+
+            var flySpeed = CameraFlySpeed != null ? CameraFlySpeed.Value : 8f;
+            var flySpeedControl = NewNativeSettingRow(GuiContent, "CameraFlySpeed", Loc.T("WC.CameraFlySpeed"), null, 64f);
+            var flySpeedFormat = DelegateSupport.ConvertDelegate<Il2CppSystem.Func<float, string>>(new Func<float, string>(value => value.ToString("0.0") + " m/s"));
+            var flySpeedChanged = DelegateSupport.ConvertDelegate<Il2CppSystem.Action<float>>(new Action<float>(value =>
+            {
+                if (CameraFlySpeed != null)
+                {
+                    CameraFlySpeed.Value = value;
+                    Settings.Save();
+                }
+            }));
+            UIF.Slider(flySpeedControl, "CameraFlySpeedSlider", 1.0f, 30.0f, flySpeed, false, flySpeedFormat, flySpeedChanged, 368f);
+
 
             BuildUpdateSection();
         }
@@ -1613,8 +2042,8 @@ namespace MaydayHostControl
                         SetPlayerActionColors(button, KickRed, Color.white);
                         break;
                     case UpdateCheckStatus.Checking:
-                        button.SetInteractable(false);
-                        SetPlayerActionColors(button, UITheme.PaperDk, UITheme.InkSoft);
+                        button.SetInteractable(true);
+                        SetPlayerActionColors(button, UITheme.PaperDk, UITheme.Ink);
                         break;
                     case UpdateCheckStatus.UpToDate:
                     case UpdateCheckStatus.NoRelease:
@@ -1797,7 +2226,9 @@ namespace MaydayHostControl
             const float padding = 24f;
             var visibleIndices = PanelOpenedForDefaults
                 ? new[] { 2, 4 }
-                : Enumerable.Range(0, GuiNavButtons.Length).ToArray();
+                : IsMemberSession
+                    ? new[] { 0, SettingsTabIndex }
+                    : Enumerable.Range(0, GuiNavButtons.Length).ToArray();
             foreach (var i in Enumerable.Range(0, GuiNavButtons.Length))
                 if (GuiNavButtons[i] != null) GuiNavButtons[i].gameObject.SetActive(visibleIndices.Contains(i));
 
@@ -2164,6 +2595,11 @@ namespace MaydayHostControl
                 }
                 var width = itemsTab ? ItemButtonWidth(CloseFooterButton, 144f, 48f) : 260f;
                 PlaceFooterButton(CloseFooterButton, 1148f - width, width);
+            }
+            if (GuiTab == 2 && SaveRoomButton != null && SaveRoomButton.gameObject.activeSelf)
+            {
+                var saveWidth = MeasureFooterButtonWidth(SaveRoomButton, 140f, 320f);
+                PlaceFooterButton(SaveRoomButton, 1148f - 260f - gap - saveWidth, saveWidth);
             }
             if (!NetworkServer.activeHost || GuiTab != 1)
             {

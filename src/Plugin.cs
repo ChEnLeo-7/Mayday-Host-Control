@@ -17,7 +17,7 @@ using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(MaydayHostControl.Plugin), "更好的房主管理", "0.5.69", "Mayday Host Control")]
+[assembly: MelonInfo(typeof(MaydayHostControl.Plugin), "更好的房主管理", "0.6.0", "Mayday Host Control")]
 
 namespace MaydayHostControl
 {
@@ -25,7 +25,7 @@ namespace MaydayHostControl
     {
         public const string Guid = "local.mayday.hostcontrol";
         public const string Name = "更好的房主管理";
-        public const string Version = "0.5.69";
+        public const string Version = "0.6.0";
 
         internal static ManualLogSource Log;
         internal static bool DebugLoggingEnabled = false;
@@ -450,7 +450,25 @@ namespace MaydayHostControl
             var detectedGameLanguage = DetectGameLanguage();
             PanelLanguage = Settings.Bind("General", "Language", detectedGameLanguage, "Host Control interface language; change in Settings.");
             OpenPanelKey = Settings.Bind("General", "OpenPanelKey", "F8", "Host Control shortcut; change in Settings.");
+            BroadcastKey = Settings.Bind("General", "BroadcastKey", "F9", "Broadcast chat shortcut; change in Settings.");
+            BroadcastPrefix = Settings.Bind("General", "BroadcastPrefix", "", "Optional prefix prepended to broadcast payloads (for raw-text compatibility).");
+            BroadcastNewlineKey = Settings.Bind("General", "BroadcastNewlineKey", "Shift", "Which modifier inserts a line break in broadcast chat (Shift or Ctrl).");
+            ThirdPersonKey = Settings.Bind("General", "ThirdPersonKey", "V", "Third person view shortcut; change in Settings.");
+            ThirdPersonFreeLookKey = Settings.Bind("General", "ThirdPersonFreeLookKey", "C", "Free-look shortcut in third person; change in Settings.");
+            ThirdPersonFreeLookSensitivity = Settings.Bind("General", "ThirdPersonFreeLookSensitivity", 1.0f, "Mouse sensitivity for third-person free look.");
+            ThirdPersonFreeLookInvertY = Settings.Bind("General", "ThirdPersonFreeLookInvertY", false, "Invert mouse Y while using third-person free look.");
+            CameraFlyKey = Settings.Bind("General", "CameraFlyKey", "H", "Free camera / ghost camera shortcut; change in Settings.");
+            CameraFlySpeed = Settings.Bind("General", "CameraFlySpeed", 8.0f, "Free camera movement speed in metres per second.");
+            CameraFlyPlayerControls = Settings.Bind("General", "CameraFlyPlayerControls", false, "Keep player movement/interaction keys active while the free camera is unlocked.");
+            CameraFlyControlsKey = Settings.Bind("General", "CameraFlyControlsKey", "J", "Toggle player controls while the free camera is active.");
+            ForceAutopilot = Settings.Bind("General", "ForceAutopilot", false, "Keep autopilot engaged while flying.");
+            ForceAutopilotKey = Settings.Bind("General", "ForceAutopilotKey", "L", "Force autopilot shortcut; change in Settings.");
+            HideHudKey = Settings.Bind("General", "HideHudKey", "F7", "Hide all HUD elements; change in Settings.");
+            InitializeBroadcastShortcut();
+            InitializeThirdPersonShortcut();
             InitializePanelShortcut();
+            InitializeForceAutopilotShortcut();
+            InitializeHideHudShortcut();
             RoomName = Settings.Bind("Room", "Name", "", "自定义 Steam 房间名称；游戏内面板可实时修改当前大厅，并作为新大厅默认名称。");
             DefaultRoomJoinable = Settings.Bind("Room", "DefaultRoomJoinable", true, "新房间是否允许玩家加入；在创建房间前的配置页面保存。");
             DefaultRoomVisibility = Settings.Bind("Room", "DefaultRoomVisibility", "FriendsOnly", "新房间可见性：Private、FriendsOnly 或 Public；保存创建前配置后生效。");
@@ -467,6 +485,8 @@ namespace MaydayHostControl
                 }
             }
             AllowAirborneSafetySnapshots = Settings.Bind("Save", "AllowAirborneSafetySnapshots", true, "允许在 Flight 阶段保存安全快照。读取时返回起飞机场 PreShift，不会原位恢复空中物理、乘客实体或客户端本地动作。");
+            AutoDispatchDisabledConfig = Settings.Bind("World", "DisableAutoDispatch", false, "关闭自动接单：航段结束后不再自动选择下一段目的地。");
+            AutoDispatchBlocked = AutoDispatchDisabledConfig.Value;
             BlacklistPath = Path.Combine(Paths.ConfigPath, "mayday-hostcontrol-blacklist.txt");
             PlayerTagsPath = Path.Combine(Paths.ConfigPath, "mayday-hostcontrol-player-tags.json");
             CommandPath = Path.Combine(Paths.ConfigPath, "mayday-hostcontrol-command.txt");
@@ -498,21 +518,125 @@ namespace MaydayHostControl
                 var ban = DelegateSupport.ConvertDelegate<Il2CppMayday.UI.ConsoleCommands.Handler>(GameBan);
                 var unban = DelegateSupport.ConvertDelegate<Il2CppMayday.UI.ConsoleCommands.Handler>(GameUnban);
                 var bans = DelegateSupport.ConvertDelegate<Il2CppMayday.UI.ConsoleCommands.Handler>(GameBans);
+                var say = DelegateSupport.ConvertDelegate<Il2CppMayday.UI.ConsoleCommands.Handler>(GameSay);
                 Il2CppMayday.UI.ConsoleCommands.Add("ma_players", "ma_players", "", players, null);
                 Il2CppMayday.UI.ConsoleCommands.Add("ma_kick", "ma_kick <SteamID64|序号>", "", kick, null);
                 Il2CppMayday.UI.ConsoleCommands.Add("ma_ban", "ma_ban <SteamID64>", "", ban, null);
                 Il2CppMayday.UI.ConsoleCommands.Add("ma_unban", "ma_unban <SteamID64>", "", unban, null);
                 Il2CppMayday.UI.ConsoleCommands.Add("ma_bans", "ma_bans", "", bans, null);
+                Il2CppMayday.UI.ConsoleCommands.Add("ma_say", "ma_say <kind> <base64>", "", say, null);
                 Log.LogInfo("[MaydayHostControl] 已注册游戏内实时命令");
             }
             catch (Exception e) { Log.LogError("[MaydayHostControl] 注册游戏内命令失败: " + e); }
         }
 
-        private static void GamePlayers(Il2CppMayday.UI.ConsoleCtx ctx, Il2CppStringArray args) => PrintPlayers(ctx);
-        private static void GameKick(Il2CppMayday.UI.ConsoleCtx ctx, Il2CppStringArray args) => ExecuteGame(ctx, "kick", args);
-        private static void GameBan(Il2CppMayday.UI.ConsoleCtx ctx, Il2CppStringArray args) => ExecuteGame(ctx, "ban", args);
-        private static void GameUnban(Il2CppMayday.UI.ConsoleCtx ctx, Il2CppStringArray args) => ExecuteGame(ctx, "unban", args);
-        private static void GameBans(Il2CppMayday.UI.ConsoleCtx ctx, Il2CppStringArray args) => PrintBans(ctx);
+        private static void GamePlayers(Il2CppMayday.UI.ConsoleCtx ctx, Il2CppStringArray args)
+        {
+            if (!RequireHostConsole(ctx)) return;
+            PrintPlayers(ctx);
+        }
+        private static void GameKick(Il2CppMayday.UI.ConsoleCtx ctx, Il2CppStringArray args)
+        {
+            if (!RequireHostConsole(ctx)) return;
+            ExecuteGame(ctx, "kick", args);
+        }
+        private static void GameBan(Il2CppMayday.UI.ConsoleCtx ctx, Il2CppStringArray args)
+        {
+            if (!RequireHostConsole(ctx)) return;
+            ExecuteGame(ctx, "ban", args);
+        }
+        private static void GameUnban(Il2CppMayday.UI.ConsoleCtx ctx, Il2CppStringArray args)
+        {
+            if (!RequireHostConsole(ctx)) return;
+            ExecuteGame(ctx, "unban", args);
+        }
+        private static void GameBans(Il2CppMayday.UI.ConsoleCtx ctx, Il2CppStringArray args)
+        {
+            if (!RequireHostConsole(ctx)) return;
+            PrintBans(ctx);
+        }
+
+        private static bool RequireHostConsole(Il2CppMayday.UI.ConsoleCtx ctx)
+        {
+            try
+            {
+                if (NetworkServer.activeHost && ctx != null && !ctx.Remote) return true;
+            }
+            catch { }
+            try { ctx?.Print("[HostAdmin] only host"); } catch { }
+            return false;
+        }
+
+        private static void GameSay(Il2CppMayday.UI.ConsoleCtx ctx, Il2CppStringArray args)
+        {
+            if (!NetworkServer.activeHost) return;
+            if (args == null || args.Length < 2)
+            {
+                try { ctx?.Print("[HostAdmin] missing message"); } catch { }
+                return;
+            }
+            if (!int.TryParse(args[0].ToString(), out var kindValue)) kindValue = 0;
+            if (kindValue != 0 && kindValue != 1 && kindValue != 4) kindValue = 0;
+            string text;
+            try { text = Encoding.UTF8.GetString(Convert.FromBase64String(args[1].ToString())); }
+            catch
+            {
+                try { ctx?.Print("[HostAdmin] invalid message"); } catch { }
+                return;
+            }
+            BroadcastRelayedChat(ctx, kindValue, text);
+        }
+
+        internal static bool TryHandleRelayedSay(Il2CppMayday.UI.ConsoleCtx ctx, string line)
+        {
+            if (!NetworkServer.activeHost || string.IsNullOrWhiteSpace(line)) return false;
+            var trimmed = line.Trim();
+            if (!trimmed.StartsWith("ma_say ", StringComparison.OrdinalIgnoreCase)) return false;
+            var parts = trimmed.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 3) return false;
+            if (!int.TryParse(parts[1], out var kindValue)) kindValue = 0;
+            if (kindValue != 0 && kindValue != 1 && kindValue != 4) kindValue = 0;
+            string text;
+            try { text = Encoding.UTF8.GetString(Convert.FromBase64String(parts[2])); }
+            catch { return false; }
+            BroadcastRelayedChat(ctx, kindValue, text);
+            return true;
+        }
+
+        private static void BroadcastRelayedChat(Il2CppMayday.UI.ConsoleCtx ctx, int kindValue, string text)
+        {
+            text = (text ?? string.Empty).Replace('\r', ' ').Replace('\n', ' ').Trim();
+            if (text.Length == 0) return;
+            if (text.Length > 120) text = text.Substring(0, 120);
+            text = text.Replace("{", "\uFF5B").Replace("}", "\uFF5D");
+            if (Time.unscaledTime < NextRelayBroadcastAt) return;
+            NextRelayBroadcastAt = Time.unscaledTime + 0.35f;
+            var caller = ctx != null ? (ctx.CallerName ?? string.Empty) : string.Empty;
+            caller = caller.Replace("{", string.Empty).Replace("}", string.Empty).Trim();
+            if (caller.Length > 24) caller = caller.Substring(0, 24);
+            var prefix = ResolveBroadcastPrefix(text);
+            var label = caller.Length > 0 ? "[" + caller + "] " : string.Empty;
+            try
+            {
+                Il2CppMayday.Notify.All(prefix + label + text, (Il2CppMayday.NotifyKind)kindValue, new Il2CppStringArray(0));
+                ctx?.Print("[HostAdmin] sent");
+            }
+            catch (Exception e)
+            {
+                Log?.LogWarning("[MaydayHostControl] relayed broadcast failed: " + e);
+            }
+        }
+
+        [HarmonyPatch(typeof(Il2CppMayday.UI.ConsoleCommands), "ExecuteRemote")]
+        internal static class ConsoleRelaySayPatch
+        {
+            [HarmonyPrefix]
+            private static bool Prefix(Il2CppMayday.UI.ConsoleCtx ctx, string line)
+            {
+                try { return !TryHandleRelayedSay(ctx, line); }
+                catch { return true; }
+            }
+        }
 
         private static void PrintPlayers(Il2CppMayday.UI.ConsoleCtx ctx)
         {

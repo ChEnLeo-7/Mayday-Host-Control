@@ -21,6 +21,13 @@ namespace MaydayHostControl
         private static CanvasGroup BlacklistWindowVisibility;
         private static float NextPlayerCardRefresh;
         private static string PlayerCardSignature = string.Empty;
+        private static string PlayerSearchText = string.Empty;
+        private static string BlacklistSearchText = string.Empty;
+        private static TMP_InputField PlayerSearchInputField;
+        private static TMP_InputField BlacklistSearchInputField;
+        private static bool PlayerSearchFocusPending;
+        private static bool PlayerSearchDirty;
+        private static float PlayerSearchDue;
         private sealed class AvatarBinding { public ulong Id; public RawImage Image; public TMP_Text Placeholder; public Texture2D RoundedTexture; }
         private static readonly List<AvatarBinding> PlayerAvatars = new();
         private static readonly List<AvatarBinding> BlacklistAvatars = new();
@@ -211,13 +218,45 @@ namespace MaydayHostControl
             }));
         }
 
+        private static void BuildPlayerSearchRow()
+        {
+            var row = UIF.Rect("PlayerSearchRow", GuiContent);
+            UIF.LE(row.gameObject, -1f, 56f, 1f, 0f, -1f, 56f);
+            PlayerSearchInputField = UIF.Input(row, "PlayerSearchInput", PlayerSearchText,
+                Loc.T("Search by name or ID"), 64,
+                NativeStringAction(value =>
+                {
+                    PlayerSearchText = value ?? string.Empty;
+                    PlayerSearchDirty = true;
+                    PlayerSearchDue = Time.unscaledTime + 0.45f;
+                }), 680f, 44f);
+            UIF.At(PlayerSearchInputField.GetComponent<RectTransform>(), UIF.TopLeft, new Vector2(0f, -6f), new Vector2(680f, 44f));
+            PlayerSearchInputField.pointSize = UITheme.SizeSmall;
+            if (PlayerSearchInputField.textComponent != null) PlayerSearchInputField.textComponent.fontSize = UITheme.SizeSmall;
+            var placeholder = PlayerSearchInputField.placeholder as TMP_Text;
+            if (placeholder != null) placeholder.fontSize = UITheme.SizeSmall;
+            var tpAllButton = NativeButton(row, "TpAllToHost", Loc.T("TP all players to host"), ButtonStyle.Secondary, 700f, 6f, 380f, 44f,
+                () => RunPanelAction(TpAllToHost));
+            var tpAllRect = tpAllButton.GetComponent<RectTransform>();
+            tpAllRect.sizeDelta = new Vector2(380f, 44f);
+            UIF.At(tpAllRect, UIF.TopLeft, new Vector2(700f, -6f), new Vector2(380f, 44f));
+            UIF.LE(tpAllButton.gameObject, 380f, 44f, 0f, 0f, 380f, 44f);
+        }
+
         private static void BuildPlayerCards()
         {
             PlayerAvatars.Clear();
             var listLayout = GuiContent.GetComponent<VerticalLayoutGroup>();
             if (listLayout != null) listLayout.spacing = 6f;
             PlayerCardSignature = CurrentPlayerSignature();
-            NativeSettingsSection(GuiContent, Loc.T("Online remote players ({0})", Online.Count));
+            BuildPlayerSearchRow();
+            var playerQuery = (PlayerSearchText ?? string.Empty).Trim();
+            var visiblePlayers = Online.Where(pair =>
+                playerQuery.Length == 0 ||
+                (pair.Value.Name ?? string.Empty).IndexOf(playerQuery, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                pair.Value.SteamId.ToString().IndexOf(playerQuery, StringComparison.OrdinalIgnoreCase) >= 0)
+                .OrderBy(pair => pair.Key.connectionId).ToArray();
+            NativeSettingsSection(GuiContent, Loc.T("Online remote players ({0})", visiblePlayers.Length));
             if (Online.Count == 0)
             {
                 var emptyState = UIF.Rect("Players.EmptyState", GuiContent);
@@ -229,7 +268,12 @@ namespace MaydayHostControl
                 UIF.LE(empty.gameObject, -1f, 42f, 1f, 0f, 1f, 42f);
                 return;
             }
-            foreach (var pair in Online.OrderBy(x => x.Key.connectionId).ToArray())
+            if (visiblePlayers.Length == 0)
+            {
+                PersonText(GuiContent, "Players.NoMatch", Loc.T("WC.NoSearchResults"), UITheme.SizeBody, UITheme.InkSoft);
+                return;
+            }
+            foreach (var pair in visiblePlayers)
             {
                 var id = pair.Value.SteamId;
                 var displayName = string.IsNullOrWhiteSpace(pair.Value.Name) ? Loc.T("Unnamed player") : pair.Value.Name;
@@ -243,6 +287,8 @@ namespace MaydayHostControl
                 var hostTarget = IsLocalHostSteamId(id);
                 if (dead && !hostTarget)
                     CardAction(actions, "Respawn", Loc.T("Respawn"), UITheme.TealDk, Color.white, () => RunPanelAction(() => RespawnManagedPlayer(id)));
+                var tpAction = CardAction(actions, "TP", Loc.T("TP"), UITheme.Teal, Color.white, () => OpenTpWindow(id));
+                tpAction.SetInteractable(player != null && !dead);
                 CardAction(actions, "SteamProfile", Loc.T("Steam profile"), FriendBlue, Color.white, () => RunPanelAction(() => OpenSteamProfile(id)));
                 if (!hostTarget && !IsSteamFriend(id))
                     CardAction(actions, "AddFriend", Loc.T("Add friend"), FriendBlue, Color.white, () => RunPanelAction(() => AddSteamFriend(id)));
@@ -271,8 +317,25 @@ namespace MaydayHostControl
             var card = UIF.Panel(BlacklistWindow, "Card", UITheme.Paper, UITheme.RadiusLarge, true, true).Root;
             UIF.At(card, UIF.Center, Vector2.zero, new Vector2(1120f, 760f));
             NativeText(card, "Title", Loc.T("Blacklist"), UITheme.SizeHeader, UITheme.Navy, TextAlignmentOptions.Left, 28f, 20f, 1064f, 48f, false);
+            BlacklistSearchInputField = UIF.Input(card, "BlacklistSearchInput", BlacklistSearchText,
+                Loc.T("Search by name or ID"), 64,
+                NativeStringAction(value =>
+                {
+                    BlacklistSearchText = value ?? string.Empty;
+                    BuildBlacklistCards();
+                    if (BlacklistSearchInputField != null)
+                    {
+                        BlacklistSearchInputField.ActivateInputField();
+                        BlacklistSearchInputField.caretPosition = (BlacklistSearchInputField.text ?? string.Empty).Length;
+                    }
+                }), 1000f, 44f);
+            UIF.At(BlacklistSearchInputField.GetComponent<RectTransform>(), UIF.TopLeft, new Vector2(28f, -80f), new Vector2(1064f, 44f));
+            BlacklistSearchInputField.pointSize = UITheme.SizeSmall;
+            if (BlacklistSearchInputField.textComponent != null) BlacklistSearchInputField.textComponent.fontSize = UITheme.SizeSmall;
+            var blacklistPlaceholder = BlacklistSearchInputField.placeholder as TMP_Text;
+            if (blacklistPlaceholder != null) blacklistPlaceholder.fontSize = UITheme.SizeSmall;
             var scroll = UIF.Scroll(card, "BlacklistScroll", out BlacklistContent, pad: UIF.Pad(0, 0, 8, 12));
-            UIF.At(scroll.GetComponent<RectTransform>(), UIF.TopLeft, new Vector2(28f, -84f), new Vector2(1064f, 564f));
+            UIF.At(scroll.GetComponent<RectTransform>(), UIF.TopLeft, new Vector2(28f, -136f), new Vector2(1064f, 512f));
             var contentLayout = BlacklistContent.GetComponent<VerticalLayoutGroup>();
             if (contentLayout != null) contentLayout.spacing = 6f;
             scroll.horizontal = false;
@@ -301,6 +364,7 @@ namespace MaydayHostControl
             UnityEngine.Object.Destroy(BlacklistWindow.gameObject);
             BlacklistWindow = null;
             BlacklistContent = null;
+            BlacklistSearchInputField = null;
             BlacklistWindowVisibility = null;
             if (MainPanelInteraction != null) { MainPanelInteraction.interactable = true; MainPanelInteraction.blocksRaycasts = true; }
             BlacklistAvatars.Clear();
@@ -319,13 +383,21 @@ namespace MaydayHostControl
                 child.SetActive(false);
                 UnityEngine.Object.Destroy(child);
             }
-            NativeSettingsSection(BlacklistContent, Loc.T("Blacklist ({0})", Blacklist.Count));
-            if (Blacklist.Count == 0)
+            var query = (BlacklistSearchText ?? string.Empty).Trim();
+            var visible = Blacklist.Where(id =>
             {
-                PersonText(BlacklistContent, "Empty", Loc.T("No banned players."), UITheme.SizeBody, UITheme.InkSoft);
+                if (query.Length == 0) return true;
+                if (id.ToString().IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                BanRecords.TryGetValue(id, out var record);
+                return (record?.PlayerName ?? string.Empty).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0;
+            }).OrderBy(x => x).ToArray();
+            NativeSettingsSection(BlacklistContent, Loc.T("Blacklist ({0})", visible.Length));
+            if (visible.Length == 0)
+            {
+                PersonText(BlacklistContent, "Empty", Loc.T("WC.NoSearchResults"), UITheme.SizeBody, UITheme.InkSoft);
                 return;
             }
-            foreach (var id in Blacklist.OrderBy(x => x).ToArray())
+            foreach (var id in visible)
             {
                 BanRecords.TryGetValue(id, out var record);
                 var displayName = string.IsNullOrWhiteSpace(record?.PlayerName) ? Loc.T("Player name not recorded") : record.PlayerName;
@@ -346,6 +418,26 @@ namespace MaydayHostControl
 
         private static void UpdatePlayerCardUi()
         {
+            if (PlayerSearchFocusPending && PlayerSearchInputField != null)
+            {
+                PlayerSearchFocusPending = false;
+                try
+                {
+                    PlayerSearchInputField.ActivateInputField();
+                    PlayerSearchInputField.caretPosition = (PlayerSearchInputField.text ?? string.Empty).Length;
+                }
+                catch { }
+            }
+            if (PlayerSearchDirty && Time.unscaledTime >= PlayerSearchDue && GuiTab == 1 && BlacklistWindow == null)
+            {
+                PlayerSearchDirty = false;
+                PlayerSearchFocusPending = true;
+                var scroll = GuiContent != null ? GuiContent.GetComponentInParent<ScrollRect>() : null;
+                var position = scroll != null ? scroll.verticalNormalizedPosition : 1f;
+                RebuildContent();
+                Canvas.ForceUpdateCanvases();
+                if (scroll != null) scroll.verticalNormalizedPosition = position;
+            }
             if (Time.unscaledTime < NextPlayerCardRefresh) return;
             NextPlayerCardRefresh = Time.unscaledTime + 0.5f;
             if (BlacklistRefreshPending && BlacklistWindow != null)

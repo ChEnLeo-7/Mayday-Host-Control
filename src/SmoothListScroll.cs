@@ -108,7 +108,7 @@ namespace MaydayHostControl
     internal static class SmoothListWheelPatch
     {
         [HarmonyPrefix]
-        private static bool Prefix(ScrollRect __instance, PointerEventData eventData) => !SmoothListScroll.OnWheel(__instance, eventData);
+        private static bool Prefix(ScrollRect __instance, PointerEventData data) => !SmoothListScroll.OnWheel(__instance, data);
     }
 
     [HarmonyPatch(typeof(ScrollRect), "LateUpdate")]

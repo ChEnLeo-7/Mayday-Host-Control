@@ -377,7 +377,7 @@ namespace MaydayHostControl
                     }
                 }
             }
-            if (host != null) ItemTargets.Add(new GrantTarget { Key = "host", Name = Loc.T("Host (local)"), Player = host });
+            if (Il2CppMirror.NetworkServer.activeHost && host != null) ItemTargets.Add(new GrantTarget { Key = "host", Name = Loc.T("Host (local)"), Player = host });
             foreach (var pair in Online.OrderBy(x => x.Key.connectionId))
             {
                 var player = GetLivePlayer(pair.Value.SteamId);
@@ -1153,7 +1153,7 @@ namespace MaydayHostControl
             ItemDockMeta.overflowMode = TextOverflowModes.Truncate;
 
             ItemDockFavoriteButton = ItemTextButton(dock, "ItemDockFavorite", string.Empty, ButtonStyle.Ghost,
-                292f, 12f, 36f, 30f, ToggleSelectedFavorite, 20f);
+                283f, 5f, 54f, 44f, ToggleSelectedFavorite, 20f);
             if (ItemDockFavoriteButton.Ring != null) ItemDockFavoriteButton.Ring.enabled = false;
             SetPlayerActionColors(ItemDockFavoriteButton, new Color(0f, 0f, 0f, 0f), UITheme.InkFaint);
             BuildItemDockFavoriteGlyphs(dock);
@@ -1199,9 +1199,9 @@ namespace MaydayHostControl
         {
             // A font star sits low and right of its own box, so the dock favourite uses the game's
             // own star sprites, placed in a fixed square centred on the favourite button.
-            const float iconSize = 20f;
-            const float centerX = 292f + 18f;
-            const float centerY = 12f + 15f;
+            const float iconSize = 30f;
+            const float centerX = 283f + 27f;
+            const float centerY = 5f + 22f;
             var topLeft = new Vector2(centerX - iconSize * 0.5f, -(centerY - iconSize * 0.5f));
             var size = new Vector2(iconSize, iconSize);
 
@@ -1712,6 +1712,7 @@ namespace MaydayHostControl
             if (ItemSearchInput != null) ItemSearchInput.DeactivateInputField();
             const float width = 440f;
             const float rowHeight = 52f;
+            const float scrollbarGutter = 18f;
             var visibleRows = Mathf.Clamp(ItemTargets.Count, 1, 8);
             var height = 88f + visibleRows * rowHeight;
             var panel = OpenItemPopup("DeliveryTargetPopup", width, height);
@@ -1724,7 +1725,13 @@ namespace MaydayHostControl
             scroll.horizontal = false;
             scroll.vertical = true;
             scroll.movementType = ScrollRect.MovementType.Clamped;
-            UIF.At(content, UIF.TopLeft, Vector2.zero, new Vector2(width - 48f, ItemTargets.Count * 52f));
+            scroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.AutoHide;
+            // A visible scrollbar otherwise overlaps the full-width target rows and is clipped
+            // by the rounded popup mask. Only reserve a gutter when the list actually scrolls.
+            var contentWidth = ItemTargets.Count <= visibleRows ? width - 48f : width - 48f - scrollbarGutter;
+            if (ItemTargets.Count <= visibleRows && scroll.verticalScrollbar != null)
+                scroll.verticalScrollbar.gameObject.SetActive(false);
+            UIF.At(content, UIF.TopLeft, Vector2.zero, new Vector2(contentWidth, ItemTargets.Count * 52f));
             for (var i = 0; i < ItemTargets.Count; i++)
             {
                 var target = ItemTargets[i];
@@ -1745,9 +1752,9 @@ namespace MaydayHostControl
                         RefreshItemTargetCaption();
                         UpdateItemDock();
                         CloseItemPopup();
-                    }), ButtonStyle.Secondary, width - 48f, 44f,
+                    }), ButtonStyle.Secondary, contentWidth, 44f,
                     new Il2CppSystem.Nullable<GlyphId>(), -1f, -1f);
-                UIF.At(row.GetComponent<RectTransform>(), UIF.TopLeft, new Vector2(0f, -(i * 52f)), new Vector2(width - 48f, 44f));
+                UIF.At(row.GetComponent<RectTransform>(), UIF.TopLeft, new Vector2(0f, -(i * 52f)), new Vector2(contentWidth, 44f));
                 if (selected)
                 {
                     var check = NativeFlowText(row.transform, "SelectedCheck", "✓", UITheme.SizeSmall,
