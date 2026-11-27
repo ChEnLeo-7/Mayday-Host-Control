@@ -196,6 +196,10 @@
 - 房主可打开全部页面；房员安装后可打开“总览 / 设置”（仅本地功能），玩家/房间/物品页及房主权限操作不可用。房主无 Mod 时房员文字只能走原版标点标签，不是真正的全屏聊天。
 - 当前版本不提供存档功能；如需保存/恢复，请使用 lansi 的存档模组。
 
+## 爱发电
+
+- https://afdian.com/a/mutterdeyu?utm_source=copylink&utm_medium=link
+
 ## 许可证
 
 本项目使用 MIT License，见 [LICENSE](LICENSE)。MelonLoader、Harmony、Steamworks.NET、Mirror、Unity 等第三方组件不随本项目分发；使用或分发前请遵守各自许可及游戏条款。
