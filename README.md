@@ -202,9 +202,30 @@
 - 房主可打开全部页面；房员安装后可打开“总览 / 设置”（仅本地功能），玩家/房间/物品页及房主权限操作不可用。房主无 Mod 时房员文字只能走原版标点标签，不是真正的全屏聊天。
 - 当前版本不提供存档功能；如需保存/恢复，请使用 lansi 的存档模组。
 
-## 爱发电
+## 帮助我们让项目继续运转
 
-- https://afdian.com/a/mutterdeyu?utm_source=copylink&utm_medium=link
+大家好，
+
+我们是 Mayday Airways 的模组加载器和房主管理工具背后的一个小团队。无论你是在运营一个装了大量模组的房间，还是只想让朋友们稳定地连在同一个服务器里，我们的目标一直很简单：好用、稳定、免费。
+
+眼下我们最大的难题不在代码，而在账单。服务器租金持续上涨，靠我们自己掏腰包已经越来越吃力。每个月我们都要为托管付费，正是这些托管支撑着加载器的服务、更新分发和房间管理功能正常运行。
+
+所以，这里需要你的帮助。如果我们的工具为你省下过时间、让联机更顺畅，或者只是让游戏更好玩了一点，欢迎考虑一次性或定期捐赠，金额不限。所有款项都直接用于服务器租金和基础设施，别无他用。我们不设付费墙、不锁功能——捐赠完全自愿，所有功能对所有人永久免费。
+
+即使你无法捐赠，把项目分享给朋友和社区，对我们的帮助也远超你的想象。
+
+感谢你成为这件事的一部分。没有你们，我们走不到今天。
+
+<p align="center">—— mutterdeyu &amp; ChEnLeo-7</p>
+
+<p align="center">
+  <a href="https://afdian.com/a/mutterdeyu?utm_source=copylink&amp;utm_medium=link">
+    <img src="https://img.shields.io/badge/%E6%8D%90%E8%B5%A0-%E7%88%B1%E5%8F%91%E7%94%B5-946CE6?style=for-the-badge" alt="捐赠" />
+  </a>
+</p>
+
+> 如果愿意支持，欢迎前往 [爱发电 · mutterdeyu](https://afdian.com/a/mutterdeyu?utm_source=copylink&utm_medium=link) 进行一次性或定期捐赠，金额不限。
+
 
 ## 许可证
 
