@@ -1,5 +1,5 @@
 # 现已发布房主管理 1.1.0
-> 源码还没发布，下个版本一起发布，现有模组加载器无法安装1.1.0，需要使用MYC模组加载器https://github.com/mutterdeyu/MYC_Mod_Loader可以下载一个
+> 源码还没发布，下个版本一起发布，现有模组加载器无法安装1.1.0，需要使用MYC模组加载器https://github.com/mutterdeyu/MYC_Mod_Loader
 > qq群：1137830754
 
 
